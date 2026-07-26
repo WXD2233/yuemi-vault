@@ -757,6 +757,59 @@ type VaultViewProps = {
   handleAddEntry: (event: FormEvent) => void;
 };
 
+function PasswordLengthInput({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  function commitDraft() {
+    const parsed = Number.parseInt(draft, 10);
+    const nextValue = Number.isNaN(parsed)
+      ? value
+      : Math.min(30, Math.max(2, parsed));
+    setDraft(String(nextValue));
+    onChange(nextValue);
+  }
+
+  return (
+    <input
+      className="length-number"
+      type="number"
+      inputMode="numeric"
+      min="2"
+      max="30"
+      step="1"
+      aria-label="密码长度数值"
+      value={draft}
+      onFocus={(event) => event.currentTarget.select()}
+      onChange={(event) => {
+        const nextDraft = event.target.value.replace(/\D/g, "").slice(0, 2);
+        setDraft(nextDraft);
+        const nextValue = Number.parseInt(nextDraft, 10);
+        if (nextValue >= 2 && nextValue <= 30) {
+          onChange(nextValue);
+        }
+      }}
+      onBlur={commitDraft}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          setDraft(String(value));
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
 function VaultView({
   vault,
   passwordLength,
@@ -800,20 +853,9 @@ function VaultView({
               value={passwordLength}
               onChange={(event) => setPasswordLength(Number(event.target.value))}
             />
-            <input
-              className="length-number"
-              type="number"
-              inputMode="numeric"
-              min="2"
-              max="30"
-              step="1"
-              aria-label="密码长度数值"
+            <PasswordLengthInput
               value={passwordLength}
-              onChange={(event) => {
-                const value = event.target.valueAsNumber;
-                if (Number.isNaN(value)) return;
-                setPasswordLength(Math.min(30, Math.max(2, Math.round(value))));
-              }}
+              onChange={setPasswordLength}
             />
           </div>
           <div className="option-grid">
