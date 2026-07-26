@@ -546,6 +546,23 @@ textarea {
   align-items: start;
 }
 
+.vault-overview .entries-panel {
+  display: none;
+}
+
+.records-only {
+  display: block;
+}
+
+.records-only .generator-panel,
+.records-only .add-entry-panel {
+  display: none;
+}
+
+.records-only .vault-main {
+  display: block;
+}
+
 .vault-main {
   min-width: 0;
   display: grid;

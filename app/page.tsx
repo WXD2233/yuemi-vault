@@ -3,7 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 type Phase = "locked" | "verify" | "vault";
-type AppView = "vault" | "settings";
+type AppView = "vault" | "records" | "settings";
 
 type VaultEntry = {
   id: string;
@@ -672,15 +672,8 @@ export default function Home() {
             <span>▣</span>密码库
           </button>
           <button
-            className="nav-item"
-            onClick={() => {
-              setView("vault");
-              window.setTimeout(() => {
-                document
-                  .getElementById("password-records")
-                  ?.scrollIntoView({ behavior: "smooth", block: "start" });
-              }, 0);
-            }}
+            className={view === "records" ? "nav-item active" : "nav-item"}
+            onClick={() => setView("records")}
           >
             <span>▤</span>密码记录
           </button>
@@ -704,9 +697,19 @@ export default function Home() {
         <header className="topbar">
           <div>
             <span className="eyebrow">
-              {view === "settings" ? "设置 / 安全" : "个人密码空间"}
+              {view === "settings"
+                ? "设置 / 安全"
+                : view === "records"
+                  ? "安全记录"
+                  : "个人密码空间"}
             </span>
-            <h1>{view === "settings" ? "安全设置" : "密码库"}</h1>
+            <h1>
+              {view === "settings"
+                ? "安全设置"
+                : view === "records"
+                  ? "密码记录"
+                  : "密码库"}
+            </h1>
           </div>
           <div className="topbar-actions">
             <span className="status-pill">
@@ -729,9 +732,10 @@ export default function Home() {
           </div>
         </header>
 
-        {view === "vault" ? (
+        {view !== "settings" ? (
           <VaultView
             vault={vault}
+            recordsOnly={view === "records"}
             masterPassword={masterPassword}
             passwordLength={passwordLength}
             setPasswordLength={setPasswordLength}
@@ -805,6 +809,7 @@ export default function Home() {
 
 type VaultViewProps = {
   vault: VaultPayload;
+  recordsOnly: boolean;
   masterPassword: string;
   passwordLength: number;
   setPasswordLength: (value: number) => void;
@@ -904,6 +909,7 @@ function PasswordLengthInput({
 
 function VaultView({
   vault,
+  recordsOnly,
   masterPassword,
   passwordLength,
   setPasswordLength,
@@ -1006,7 +1012,13 @@ function VaultView({
   }
 
   return (
-    <div className="vault-layout">
+    <div
+      className={
+        recordsOnly
+          ? "vault-layout records-only"
+          : "vault-layout vault-overview"
+      }
+    >
       <div className="vault-main">
         <section className="panel generator-panel" id="password-generator">
           <div className="section-heading">
