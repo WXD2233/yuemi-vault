@@ -1291,35 +1291,37 @@ function VaultView({
                 ×
               </button>
             </div>
-            <div className="secret-account">
-              <span>账号</span>
-              <div>
-                <strong>{revealedSecret.entry.account}</strong>
-                <button type="button" onClick={copyRevealedAccount}>
-                  {accountCopied ? "已复制" : "复制账号"}
-                </button>
+            <div className="secret-credentials">
+              <div className="secret-account">
+                <span>账号</span>
+                <div>
+                  <strong>{revealedSecret.entry.account}</strong>
+                  <button type="button" onClick={copyRevealedAccount}>
+                    {accountCopied ? "已复制" : "复制账号"}
+                  </button>
+                </div>
               </div>
+              {revealedSecret.error ? (
+                <p className="secret-error">{revealedSecret.error}</p>
+              ) : (
+                <div className="secret-password">
+                  <span className="secret-label">密码</span>
+                  <div className="secret-display">
+                    <code>{revealedSecret.password}</code>
+                    <button type="button" onClick={copyRevealedPassword}>
+                      {passwordCopied ? "已复制" : "复制密码"}
+                    </button>
+                  </div>
+                  <p className="secret-note">
+                    密码仅在当前已解锁的浏览器中解密，不会以明文发送到服务端。
+                  </p>
+                </div>
+              )}
             </div>
             <div className="secret-notes">
               <span>备注</span>
               <p>{revealedSecret.entry.notes || "暂无备注"}</p>
             </div>
-            {revealedSecret.error ? (
-              <p className="secret-error">{revealedSecret.error}</p>
-            ) : (
-              <>
-                <span className="secret-label">密码</span>
-                <div className="secret-display">
-                  <code>{revealedSecret.password}</code>
-                  <button type="button" onClick={copyRevealedPassword}>
-                    {passwordCopied ? "已复制" : "复制密码"}
-                  </button>
-                </div>
-                <p className="secret-note">
-                  密码仅在当前已解锁的浏览器中解密，不会以明文发送到服务端。
-                </p>
-              </>
-            )}
             <button
               className="secondary-button password-modal-done"
               type="button"

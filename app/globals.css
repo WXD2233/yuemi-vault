@@ -1261,14 +1261,17 @@ textarea {
   line-height: 1;
 }
 
-.secret-account {
-  display: grid;
-  gap: 5px;
+.secret-credentials {
   margin-top: 22px;
-  padding: 13px 15px;
+  padding: 15px;
   border: 1px solid var(--border);
   border-radius: 11px;
   background: rgba(255, 255, 255, 0.018);
+}
+
+.secret-account {
+  display: grid;
+  gap: 5px;
 }
 
 .secret-account span,
@@ -1320,6 +1323,16 @@ textarea {
   margin: 20px 0 8px;
 }
 
+.secret-password {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.secret-password .secret-label {
+  margin: 0 0 8px;
+}
+
 .secret-display {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1359,7 +1372,7 @@ textarea {
 }
 
 .secret-error {
-  margin: 20px 0 0;
+  margin: 16px 0 0;
   padding: 14px;
   border: 1px solid rgba(255, 109, 93, 0.25);
   border-radius: 11px;
