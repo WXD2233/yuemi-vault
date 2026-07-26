@@ -9,6 +9,7 @@ export const vaultEntries = sqliteTable("vault_entries", {
   securityStatus: text("security_status").notNull().default("安全"),
   passwordCipher: text("password_cipher").notNull(),
   passwordIv: text("password_iv").notNull(),
+  notes: text("notes").notNull().default(""),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 

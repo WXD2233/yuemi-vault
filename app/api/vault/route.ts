@@ -47,6 +47,7 @@ export async function GET(request: Request) {
           securityStatus: vaultEntries.securityStatus,
           passwordCipher: vaultEntries.passwordCipher,
           passwordIv: vaultEntries.passwordIv,
+          notes: vaultEntries.notes,
           updatedAt: vaultEntries.updatedAt,
         })
         .from(vaultEntries)
@@ -103,6 +104,7 @@ export async function POST(request: Request) {
       const category = String(payload.category ?? "").trim();
       const passwordCipher = String(payload.passwordCipher ?? "");
       const passwordIv = String(payload.passwordIv ?? "");
+      const notes = String(payload.notes ?? "").trim();
 
       if (
         !projectName ||
@@ -121,6 +123,7 @@ export async function POST(request: Request) {
         category,
         passwordCipher,
         passwordIv,
+        notes,
         securityStatus: "安全",
         updatedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
       });
@@ -134,6 +137,7 @@ export async function POST(request: Request) {
       const category = String(payload.category ?? "").trim();
       const passwordCipher = String(payload.passwordCipher ?? "");
       const passwordIv = String(payload.passwordIv ?? "");
+      const notes = String(payload.notes ?? "").trim();
 
       if (!id || !projectName || !account || !category) {
         return Response.json({ error: "缺少密码记录字段" }, { status: 400 });
@@ -151,6 +155,7 @@ export async function POST(request: Request) {
           projectName,
           account,
           category,
+          notes,
           updatedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
           ...(passwordCipher && passwordIv
             ? { passwordCipher, passwordIv, securityStatus: "安全" }

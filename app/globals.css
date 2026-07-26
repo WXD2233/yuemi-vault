@@ -1255,9 +1255,47 @@ textarea {
 }
 
 .secret-account span,
-.secret-label {
+.secret-label,
+.secret-notes > span {
   color: var(--muted);
   font-size: 11px;
+}
+
+.secret-account > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.secret-account button {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid rgba(47, 212, 157, 0.26);
+  border-radius: 8px;
+  color: var(--green-bright);
+  background: var(--green-soft);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.secret-notes {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.secret-notes p {
+  margin: 0;
+  color: #cbd7e3;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 12px;
 }
 
 .secret-label {
@@ -1716,6 +1754,11 @@ textarea {
 
   .secret-display {
     grid-template-columns: 1fr;
+  }
+
+  .secret-account > div {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

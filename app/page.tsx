@@ -13,6 +13,7 @@ type VaultEntry = {
   securityStatus: string;
   passwordCipher: string;
   passwordIv: string;
+  notes: string;
   updatedAt: string;
 };
 
@@ -201,6 +202,7 @@ export default function Home() {
     account: "",
     category: "开发工具",
     password: "",
+    notes: "",
   });
 
   const fetchVault = useCallback(async (token: string) => {
@@ -411,6 +413,7 @@ export default function Home() {
         projectName: entryForm.projectName,
         account: entryForm.account,
         category: entryForm.category,
+        notes: entryForm.notes,
         ...encrypted,
       });
       setEntryForm({
@@ -418,6 +421,7 @@ export default function Home() {
         account: "",
         category: "开发工具",
         password: "",
+        notes: "",
       });
       await fetchVault(sessionToken);
       setToast("密码已加密保存");
@@ -433,6 +437,7 @@ export default function Home() {
       account: string;
       category: string;
       password: string;
+      notes: string;
     },
   ) {
     if (!values.projectName || !values.account || !values.category) {
@@ -450,6 +455,7 @@ export default function Home() {
         projectName: values.projectName,
         account: values.account,
         category: values.category,
+        notes: values.notes,
         ...encrypted,
       });
       await fetchVault(sessionToken);
@@ -820,6 +826,7 @@ type VaultViewProps = {
     account: string;
     category: string;
     password: string;
+    notes: string;
   };
   setEntryForm: React.Dispatch<
     React.SetStateAction<{
@@ -827,6 +834,7 @@ type VaultViewProps = {
       account: string;
       category: string;
       password: string;
+      notes: string;
     }>
   >;
   handleAddEntry: (event: FormEvent) => void;
@@ -837,6 +845,7 @@ type VaultViewProps = {
       account: string;
       category: string;
       password: string;
+      notes: string;
     },
   ) => Promise<boolean>;
 };
@@ -916,6 +925,7 @@ function VaultView({
   } | null>(null);
   const [revealingId, setRevealingId] = useState("");
   const [passwordCopied, setPasswordCopied] = useState(false);
+  const [accountCopied, setAccountCopied] = useState(false);
   const [editEntry, setEditEntry] = useState<VaultEntry | null>(null);
   const [editSaving, setEditSaving] = useState(false);
   const [editForm, setEditForm] = useState({
@@ -923,11 +933,13 @@ function VaultView({
     account: "",
     category: "",
     password: "",
+    notes: "",
   });
 
   async function revealPassword(entry: VaultEntry) {
     setRevealingId(entry.id);
     setPasswordCopied(false);
+    setAccountCopied(false);
     try {
       if (
         entry.passwordCipher === "encrypted-demo-value" ||
@@ -964,6 +976,12 @@ function VaultView({
     setPasswordCopied(true);
   }
 
+  async function copyRevealedAccount() {
+    if (!revealedSecret?.entry.account) return;
+    await navigator.clipboard.writeText(revealedSecret.entry.account);
+    setAccountCopied(true);
+  }
+
   function beginEditEntry(entry: VaultEntry) {
     setRevealedSecret(null);
     setEditEntry(entry);
@@ -972,6 +990,7 @@ function VaultView({
       account: entry.account,
       category: entry.category,
       password: "",
+      notes: entry.notes ?? "",
     });
   }
 
@@ -1219,7 +1238,17 @@ function VaultView({
           </div>
           <label>
             备注
-            <textarea placeholder="添加备注（可选）" rows={4} />
+            <textarea
+              value={entryForm.notes}
+              onChange={(event) =>
+                setEntryForm((current) => ({
+                  ...current,
+                  notes: event.target.value,
+                }))
+              }
+              placeholder="添加备注（可选）"
+              rows={4}
+            />
           </label>
           <button className="primary-button save-entry" type="submit">
             保存密码
@@ -1253,7 +1282,16 @@ function VaultView({
             </div>
             <div className="secret-account">
               <span>账号</span>
-              <strong>{revealedSecret.entry.account}</strong>
+              <div>
+                <strong>{revealedSecret.entry.account}</strong>
+                <button type="button" onClick={copyRevealedAccount}>
+                  {accountCopied ? "已复制" : "复制账号"}
+                </button>
+              </div>
+            </div>
+            <div className="secret-notes">
+              <span>备注</span>
+              <p>{revealedSecret.entry.notes || "暂无备注"}</p>
             </div>
             {revealedSecret.error ? (
               <p className="secret-error">{revealedSecret.error}</p>
@@ -1376,6 +1414,20 @@ function VaultView({
                 <span className="optional-field-note">
                   只有填写新密码时才会重新加密并替换原密码。
                 </span>
+              </label>
+              <label>
+                备注
+                <textarea
+                  rows={4}
+                  value={editForm.notes}
+                  onChange={(event) =>
+                    setEditForm((current) => ({
+                      ...current,
+                      notes: event.target.value,
+                    }))
+                  }
+                  placeholder="添加备注（可选）"
+                />
               </label>
               <div className="modal-actions">
                 <button

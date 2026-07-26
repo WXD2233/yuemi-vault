@@ -20,6 +20,7 @@ export async function ensureVaultSchema() {
         security_status TEXT NOT NULL DEFAULT '安全',
         password_cipher TEXT NOT NULL,
         password_iv TEXT NOT NULL,
+        notes TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `),
@@ -68,6 +69,18 @@ export async function ensureVaultSchema() {
       )
     `),
   ]);
+
+  const entryColumns = await env.DB.prepare(
+    "PRAGMA table_info(vault_entries)",
+  ).all<{ name: string }>();
+  const existingEntryColumns = new Set(
+    entryColumns.results.map((column) => column.name),
+  );
+  if (!existingEntryColumns.has("notes")) {
+    await env.DB.prepare(
+      "ALTER TABLE vault_entries ADD COLUMN notes TEXT NOT NULL DEFAULT ''",
+    ).run();
+  }
 
   const settingsColumns = await env.DB.prepare(
     "PRAGMA table_info(security_settings)",

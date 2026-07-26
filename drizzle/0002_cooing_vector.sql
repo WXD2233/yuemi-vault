@@ -1,0 +1,1 @@
+ALTER TABLE `vault_entries` ADD `notes` text DEFAULT '' NOT NULL;
