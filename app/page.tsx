@@ -851,8 +851,10 @@ function VaultView({
                   <i>{entry.projectName.slice(0, 1).toUpperCase()}</i>
                   {entry.projectName}
                 </span>
-                <span className="muted-account">{entry.account}</span>
-                <span>
+                <span className="muted-account" data-label="账号">
+                  {entry.account}
+                </span>
+                <span className="category-cell" data-label="分类">
                   <em
                     className={`category-chip ${
                       categoryTone[entry.category] ?? "blue"
@@ -861,8 +863,12 @@ function VaultView({
                     {entry.category}
                   </em>
                 </span>
-                <span className="safe-state">◇ {entry.securityStatus}</span>
-                <span className="date-cell">{entry.updatedAt}</span>
+                <span className="safe-state" data-label="安全状态">
+                  ◇ {entry.securityStatus}
+                </span>
+                <span className="date-cell" data-label="更新时间">
+                  {entry.updatedAt}
+                </span>
                 <button type="button" className="row-menu" aria-label="更多操作">
                   •••
                 </button>
