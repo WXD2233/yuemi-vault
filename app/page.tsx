@@ -57,6 +57,14 @@ const categoryTone: Record<string, string> = {
   社交: "orange",
 };
 
+const recommendedCategories = [
+  "开发工具",
+  "电子邮件",
+  "服务器",
+  "金融",
+  "社交",
+];
+
 function bytesToBase64(bytes: Uint8Array) {
   let binary = "";
   bytes.forEach((byte) => {
@@ -957,9 +965,10 @@ function VaultView({
           >
             使用刚生成的密码
           </button>
-          <label>
+          <label className="category-field">
             分类
-            <select
+            <input
+              list="recommended-categories"
               value={entryForm.category}
               onChange={(event) =>
                 setEntryForm((current) => ({
@@ -967,14 +976,29 @@ function VaultView({
                   category: event.target.value,
                 }))
               }
-            >
-              <option>开发工具</option>
-              <option>电子邮件</option>
-              <option>服务器</option>
-              <option>金融</option>
-              <option>社交</option>
-            </select>
+              placeholder="选择推荐分类或输入自定义分类"
+            />
+            <datalist id="recommended-categories">
+              {recommendedCategories.map((category) => (
+                <option key={category} value={category} />
+              ))}
+            </datalist>
           </label>
+          <div className="category-suggestions" aria-label="推荐分类">
+            <span>推荐</span>
+            {recommendedCategories.map((category) => (
+              <button
+                key={category}
+                type="button"
+                className={entryForm.category === category ? "active" : ""}
+                onClick={() =>
+                  setEntryForm((current) => ({ ...current, category }))
+                }
+              >
+                {category}
+              </button>
+            ))}
+          </div>
           <label>
             备注
             <textarea placeholder="添加备注（可选）" rows={4} />
