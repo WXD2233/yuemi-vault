@@ -73,6 +73,10 @@ function bytesToBase64(bytes: Uint8Array) {
   return btoa(binary);
 }
 
+function base64ToBytes(value: string) {
+  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+}
+
 async function encryptSecret(secret: string, masterPassword: string) {
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
@@ -104,6 +108,39 @@ async function encryptSecret(secret: string, masterPassword: string) {
     passwordCipher: bytesToBase64(new Uint8Array(cipher)),
     passwordIv: bytesToBase64(iv),
   };
+}
+
+async function decryptSecret(
+  passwordCipher: string,
+  passwordIv: string,
+  masterPassword: string,
+) {
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(masterPassword),
+    "PBKDF2",
+    false,
+    ["deriveKey"],
+  );
+  const key = await crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      salt: new TextEncoder().encode("yue-mi-vault-v1"),
+      iterations: 150_000,
+    },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["decrypt"],
+  );
+  const plain = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(passwordIv) },
+    key,
+    base64ToBytes(passwordCipher),
+  );
+
+  return new TextDecoder().decode(plain);
 }
 
 function makePassword(length: number, options: Record<string, boolean>) {
@@ -655,6 +692,7 @@ export default function Home() {
         {view === "vault" ? (
           <VaultView
             vault={vault}
+            masterPassword={masterPassword}
             passwordLength={passwordLength}
             setPasswordLength={setPasswordLength}
             passwordOptions={passwordOptions}
@@ -726,6 +764,7 @@ export default function Home() {
 
 type VaultViewProps = {
   vault: VaultPayload;
+  masterPassword: string;
   passwordLength: number;
   setPasswordLength: (value: number) => void;
   passwordOptions: Record<string, boolean>;
@@ -812,6 +851,7 @@ function PasswordLengthInput({
 
 function VaultView({
   vault,
+  masterPassword,
   passwordLength,
   setPasswordLength,
   passwordOptions,
@@ -823,6 +863,53 @@ function VaultView({
   setEntryForm,
   handleAddEntry,
 }: VaultViewProps) {
+  const [revealedSecret, setRevealedSecret] = useState<{
+    entry: VaultEntry;
+    password: string;
+    error: string;
+  } | null>(null);
+  const [revealingId, setRevealingId] = useState("");
+  const [passwordCopied, setPasswordCopied] = useState(false);
+
+  async function revealPassword(entry: VaultEntry) {
+    setRevealingId(entry.id);
+    setPasswordCopied(false);
+    try {
+      if (
+        entry.passwordCipher === "encrypted-demo-value" ||
+        entry.passwordIv === "demo-iv"
+      ) {
+        setRevealedSecret({
+          entry,
+          password: "",
+          error: "这是内置演示记录，没有保存真实密码。你新建的记录可以正常解密查看。",
+        });
+        return;
+      }
+
+      const password = await decryptSecret(
+        entry.passwordCipher,
+        entry.passwordIv,
+        masterPassword,
+      );
+      setRevealedSecret({ entry, password, error: "" });
+    } catch {
+      setRevealedSecret({
+        entry,
+        password: "",
+        error: "密码解密失败。请锁定密码库后重新输入主密码再试。",
+      });
+    } finally {
+      setRevealingId("");
+    }
+  }
+
+  async function copyRevealedPassword() {
+    if (!revealedSecret?.password) return;
+    await navigator.clipboard.writeText(revealedSecret.password);
+    setPasswordCopied(true);
+  }
+
   return (
     <div className="vault-layout">
       <div className="vault-main">
@@ -933,8 +1020,14 @@ function VaultView({
                 <span className="date-cell" data-label="更新时间">
                   {entry.updatedAt}
                 </span>
-                <button type="button" className="row-menu" aria-label="更多操作">
-                  •••
+                <button
+                  type="button"
+                  className="row-menu"
+                  aria-label={`查看 ${entry.projectName} 的密码`}
+                  disabled={revealingId === entry.id}
+                  onClick={() => revealPassword(entry)}
+                >
+                  {revealingId === entry.id ? "解密中…" : "查看"}
                 </button>
               </div>
             ))}
@@ -1046,6 +1139,61 @@ function VaultView({
           </button>
         </form>
       </aside>
+
+      {revealedSecret ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="password-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="password-view-title"
+          >
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">本地解密</span>
+                <h2 id="password-view-title">
+                  {revealedSecret.entry.projectName}
+                </h2>
+              </div>
+              <button
+                type="button"
+                className="modal-close"
+                aria-label="关闭密码查看窗口"
+                onClick={() => setRevealedSecret(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="secret-account">
+              <span>账号</span>
+              <strong>{revealedSecret.entry.account}</strong>
+            </div>
+            {revealedSecret.error ? (
+              <p className="secret-error">{revealedSecret.error}</p>
+            ) : (
+              <>
+                <span className="secret-label">密码</span>
+                <div className="secret-display">
+                  <code>{revealedSecret.password}</code>
+                  <button type="button" onClick={copyRevealedPassword}>
+                    {passwordCopied ? "已复制" : "复制密码"}
+                  </button>
+                </div>
+                <p className="secret-note">
+                  密码仅在当前已解锁的浏览器中解密，不会以明文发送到服务端。
+                </p>
+              </>
+            )}
+            <button
+              className="secondary-button password-modal-done"
+              type="button"
+              onClick={() => setRevealedSecret(null)}
+            >
+              完成
+            </button>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
