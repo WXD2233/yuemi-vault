@@ -811,7 +811,7 @@ textarea {
 .table-row {
   min-width: 760px;
   display: grid;
-  grid-template-columns: 1.2fr 1.08fr 0.86fr 0.9fr 1fr 74px;
+  grid-template-columns: 1.2fr 1.08fr 0.86fr 0.9fr 1fr 122px;
   align-items: center;
   gap: 12px;
   min-height: 58px;
@@ -898,6 +898,23 @@ textarea {
   border-radius: 8px;
   color: var(--green-bright);
   background: var(--green-soft);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.edit-entry {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: #b8c7d8;
+  background: rgba(255, 255, 255, 0.025);
   font-size: 10px;
   font-weight: 700;
 }
@@ -1300,6 +1317,27 @@ textarea {
   margin-top: 22px;
 }
 
+.edit-entry-form {
+  display: grid;
+  gap: 13px;
+  margin-top: 22px;
+}
+
+.edit-entry-form label {
+  display: grid;
+  gap: 7px;
+  color: #c6d1df;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.optional-field-note {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
 .warning-mark {
   width: 46px;
   height: 46px;
@@ -1527,7 +1565,7 @@ textarea {
 
   .project-cell {
     grid-column: 1 / -1;
-    padding-right: 34px;
+    padding-right: 116px;
     font-size: 13px;
   }
 
@@ -1554,13 +1592,17 @@ textarea {
     text-align: right;
   }
 
-  .row-menu {
+  .row-actions {
     position: absolute;
     top: 14px;
     right: 12px;
-    width: auto;
-    min-width: 52px;
-    height: 34px;
+  }
+
+  .row-menu,
+  .edit-entry {
+    min-width: 48px;
+    min-height: 34px;
+    padding-inline: 8px;
   }
 
   .device-card {

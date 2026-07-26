@@ -127,6 +127,39 @@ export async function POST(request: Request) {
       return Response.json({ ok: true }, { status: 201 });
     }
 
+    if (action === "update-entry") {
+      const id = String(payload.id ?? "").trim();
+      const projectName = String(payload.projectName ?? "").trim();
+      const account = String(payload.account ?? "").trim();
+      const category = String(payload.category ?? "").trim();
+      const passwordCipher = String(payload.passwordCipher ?? "");
+      const passwordIv = String(payload.passwordIv ?? "");
+
+      if (!id || !projectName || !account || !category) {
+        return Response.json({ error: "缺少密码记录字段" }, { status: 400 });
+      }
+      if (
+        (passwordCipher && !passwordIv) ||
+        (!passwordCipher && passwordIv)
+      ) {
+        return Response.json({ error: "新密码密文不完整" }, { status: 400 });
+      }
+
+      await db
+        .update(vaultEntries)
+        .set({
+          projectName,
+          account,
+          category,
+          updatedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
+          ...(passwordCipher && passwordIv
+            ? { passwordCipher, passwordIv, securityStatus: "安全" }
+            : {}),
+        })
+        .where(eq(vaultEntries.id, id));
+      return Response.json({ ok: true });
+    }
+
     if (action === "set-two-factor") {
       await db
         .update(securitySettings)

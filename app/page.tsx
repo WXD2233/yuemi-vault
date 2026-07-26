@@ -426,6 +426,41 @@ export default function Home() {
     }
   }
 
+  async function handleUpdateEntry(
+    id: string,
+    values: {
+      projectName: string;
+      account: string;
+      category: string;
+      password: string;
+    },
+  ) {
+    if (!values.projectName || !values.account || !values.category) {
+      setToast("请填写项目名称、账号和分类");
+      return false;
+    }
+
+    try {
+      const encrypted = values.password
+        ? await encryptSecret(values.password, masterPassword)
+        : {};
+      await postVault({
+        action: "update-entry",
+        id,
+        projectName: values.projectName,
+        account: values.account,
+        category: values.category,
+        ...encrypted,
+      });
+      await fetchVault(sessionToken);
+      setToast("密码记录已更新");
+      return true;
+    } catch {
+      setToast("修改失败，请稍后重试");
+      return false;
+    }
+  }
+
   async function handleToggleTwoFactor() {
     try {
       await postVault({
@@ -703,6 +738,7 @@ export default function Home() {
             entryForm={entryForm}
             setEntryForm={setEntryForm}
             handleAddEntry={handleAddEntry}
+            handleUpdateEntry={handleUpdateEntry}
           />
         ) : (
           <SettingsView
@@ -794,6 +830,15 @@ type VaultViewProps = {
     }>
   >;
   handleAddEntry: (event: FormEvent) => void;
+  handleUpdateEntry: (
+    id: string,
+    values: {
+      projectName: string;
+      account: string;
+      category: string;
+      password: string;
+    },
+  ) => Promise<boolean>;
 };
 
 function PasswordLengthInput({
@@ -862,6 +907,7 @@ function VaultView({
   entryForm,
   setEntryForm,
   handleAddEntry,
+  handleUpdateEntry,
 }: VaultViewProps) {
   const [revealedSecret, setRevealedSecret] = useState<{
     entry: VaultEntry;
@@ -870,6 +916,14 @@ function VaultView({
   } | null>(null);
   const [revealingId, setRevealingId] = useState("");
   const [passwordCopied, setPasswordCopied] = useState(false);
+  const [editEntry, setEditEntry] = useState<VaultEntry | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editForm, setEditForm] = useState({
+    projectName: "",
+    account: "",
+    category: "",
+    password: "",
+  });
 
   async function revealPassword(entry: VaultEntry) {
     setRevealingId(entry.id);
@@ -908,6 +962,29 @@ function VaultView({
     if (!revealedSecret?.password) return;
     await navigator.clipboard.writeText(revealedSecret.password);
     setPasswordCopied(true);
+  }
+
+  function beginEditEntry(entry: VaultEntry) {
+    setRevealedSecret(null);
+    setEditEntry(entry);
+    setEditForm({
+      projectName: entry.projectName,
+      account: entry.account,
+      category: entry.category,
+      password: "",
+    });
+  }
+
+  async function saveEditedEntry(event: FormEvent) {
+    event.preventDefault();
+    if (!editEntry) return;
+    setEditSaving(true);
+    try {
+      const saved = await handleUpdateEntry(editEntry.id, editForm);
+      if (saved) setEditEntry(null);
+    } finally {
+      setEditSaving(false);
+    }
   }
 
   return (
@@ -1020,15 +1097,25 @@ function VaultView({
                 <span className="date-cell" data-label="更新时间">
                   {entry.updatedAt}
                 </span>
-                <button
-                  type="button"
-                  className="row-menu"
-                  aria-label={`查看 ${entry.projectName} 的密码`}
-                  disabled={revealingId === entry.id}
-                  onClick={() => revealPassword(entry)}
-                >
-                  {revealingId === entry.id ? "解密中…" : "查看"}
-                </button>
+                <span className="row-actions">
+                  <button
+                    type="button"
+                    className="row-menu"
+                    aria-label={`查看 ${entry.projectName} 的密码`}
+                    disabled={revealingId === entry.id}
+                    onClick={() => revealPassword(entry)}
+                  >
+                    {revealingId === entry.id ? "解密中…" : "查看"}
+                  </button>
+                  <button
+                    type="button"
+                    className="edit-entry"
+                    aria-label={`修改 ${entry.projectName}`}
+                    onClick={() => beginEditEntry(entry)}
+                  >
+                    修改
+                  </button>
+                </span>
               </div>
             ))}
           </div>
@@ -1191,6 +1278,122 @@ function VaultView({
             >
               完成
             </button>
+          </section>
+        </div>
+      ) : null}
+
+      {editEntry ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="password-modal edit-entry-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-entry-title"
+          >
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">编辑记录</span>
+                <h2 id="edit-entry-title">修改密码项目</h2>
+              </div>
+              <button
+                type="button"
+                className="modal-close"
+                aria-label="关闭修改窗口"
+                onClick={() => setEditEntry(null)}
+              >
+                ×
+              </button>
+            </div>
+            <form className="edit-entry-form" onSubmit={saveEditedEntry}>
+              <label>
+                项目名称
+                <input
+                  autoFocus
+                  value={editForm.projectName}
+                  onChange={(event) =>
+                    setEditForm((current) => ({
+                      ...current,
+                      projectName: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                账号
+                <input
+                  value={editForm.account}
+                  onChange={(event) =>
+                    setEditForm((current) => ({
+                      ...current,
+                      account: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                分类
+                <input
+                  type="text"
+                  autoComplete="off"
+                  value={editForm.category}
+                  onChange={(event) =>
+                    setEditForm((current) => ({
+                      ...current,
+                      category: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <div className="category-suggestions" aria-label="推荐分类">
+                <span>推荐</span>
+                {recommendedCategories.map((category) => (
+                  <button
+                    key={category}
+                    type="button"
+                    className={editForm.category === category ? "active" : ""}
+                    onClick={() =>
+                      setEditForm((current) => ({ ...current, category }))
+                    }
+                  >
+                    {category}
+                  </button>
+                ))}
+              </div>
+              <label>
+                新密码
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={editForm.password}
+                  onChange={(event) =>
+                    setEditForm((current) => ({
+                      ...current,
+                      password: event.target.value,
+                    }))
+                  }
+                  placeholder="留空则保持原密码不变"
+                />
+                <span className="optional-field-note">
+                  只有填写新密码时才会重新加密并替换原密码。
+                </span>
+              </label>
+              <div className="modal-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setEditEntry(null)}
+                >
+                  取消
+                </button>
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={editSaving}
+                >
+                  {editSaving ? "保存中…" : "保存修改"}
+                </button>
+              </div>
+            </form>
           </section>
         </div>
       ) : null}
