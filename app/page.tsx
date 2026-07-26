@@ -675,15 +675,14 @@ export default function Home() {
             className="nav-item"
             onClick={() => {
               setView("vault");
-              document
-                .getElementById("password-generator")
-                ?.scrollIntoView({ behavior: "smooth" });
+              window.setTimeout(() => {
+                document
+                  .getElementById("password-records")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }, 0);
             }}
           >
-            <span>⌁</span>密码生成器
-          </button>
-          <button className="nav-item" onClick={() => setView("vault")}>
-            <span>◇</span>安全检查
+            <span>▤</span>密码记录
           </button>
           <button
             className={view === "settings" ? "nav-item active" : "nav-item"}
@@ -1072,7 +1071,7 @@ function VaultView({
           </div>
         </section>
 
-        <section className="panel entries-panel">
+        <section className="panel entries-panel" id="password-records">
           <div className="section-heading entries-heading">
             <div>
               <span className="eyebrow">安全记录</span>
