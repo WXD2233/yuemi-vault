@@ -1,5 +1,10 @@
 import { env } from "cloudflare:workers";
 
+const MASTER_PASSWORD_HASH =
+  "3651389d80ea709f76a95ec93ca42343eb35a31525020cc9b7a58100159a139c";
+const LEGACY_MASTER_PASSWORD_HASH =
+  "c079208ec8d20c1aab38ffdc12de7252735ba1ab334e19b56bc1c237f89aaced";
+
 export async function ensureVaultSchema() {
   if (!env.DB) {
     throw new Error("Cloudflare D1 binding `DB` is unavailable.");
@@ -32,10 +37,66 @@ export async function ensureVaultSchema() {
       CREATE TABLE IF NOT EXISTS security_settings (
         id INTEGER PRIMARY KEY NOT NULL,
         two_factor_enabled INTEGER NOT NULL DEFAULT 1,
-        email TEXT NOT NULL DEFAULT 'w***@example.com'
+        email TEXT NOT NULL DEFAULT 'w***@example.com',
+        master_password_hash TEXT NOT NULL DEFAULT '${MASTER_PASSWORD_HASH}',
+        max_failed_attempts INTEGER NOT NULL DEFAULT 5,
+        lockout_minutes INTEGER NOT NULL DEFAULT 15
+      )
+    `),
+    env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS login_attempts (
+        device_id TEXT PRIMARY KEY NOT NULL,
+        failed_count INTEGER NOT NULL DEFAULT 0,
+        locked_until TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS vault_sessions (
+        token_hash TEXT PRIMARY KEY NOT NULL,
+        device_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS verification_challenges (
+        token_hash TEXT PRIMARY KEY NOT NULL,
+        device_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `),
   ]);
+
+  const settingsColumns = await env.DB.prepare(
+    "PRAGMA table_info(security_settings)",
+  ).all<{ name: string }>();
+  const existingColumns = new Set(
+    settingsColumns.results.map((column) => column.name),
+  );
+
+  if (!existingColumns.has("master_password_hash")) {
+    await env.DB.prepare(
+      `ALTER TABLE security_settings ADD COLUMN master_password_hash TEXT NOT NULL DEFAULT '${MASTER_PASSWORD_HASH}'`,
+    ).run();
+  }
+  if (!existingColumns.has("max_failed_attempts")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN max_failed_attempts INTEGER NOT NULL DEFAULT 5",
+    ).run();
+  }
+  if (!existingColumns.has("lockout_minutes")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN lockout_minutes INTEGER NOT NULL DEFAULT 15",
+    ).run();
+  }
+
+  await env.DB.prepare(
+    "UPDATE security_settings SET master_password_hash = ? WHERE id = 1 AND master_password_hash = ?",
+  )
+    .bind(MASTER_PASSWORD_HASH, LEGACY_MASTER_PASSWORD_HASH)
+    .run();
 
   const entryCount = await env.DB.prepare(
     "SELECT COUNT(*) AS total FROM vault_entries",
@@ -130,8 +191,8 @@ export async function ensureVaultSchema() {
   if (!settingsCount?.total) {
     seedStatements.push(
       env.DB.prepare(
-        "INSERT INTO security_settings (id, two_factor_enabled, email) VALUES (1, 1, ?)",
-      ).bind("w***@example.com"),
+        "INSERT INTO security_settings (id, two_factor_enabled, email, master_password_hash, max_failed_attempts, lockout_minutes) VALUES (1, 1, ?, ?, 5, 15)",
+      ).bind("w***@example.com", MASTER_PASSWORD_HASH),
     );
   }
 

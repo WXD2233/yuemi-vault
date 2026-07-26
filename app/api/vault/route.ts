@@ -1,5 +1,7 @@
+import { env } from "cloudflare:workers";
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
+import { getVaultSession } from "../../../db/auth";
 import { ensureVaultSchema } from "../../../db/ensure";
 import {
   securitySettings,
@@ -14,9 +16,26 @@ function errorResponse(error: unknown) {
   return Response.json({ error: message }, { status: 500 });
 }
 
-export async function GET() {
+async function authorize(request: Request) {
+  const session = await getVaultSession(request);
+  if (!session) {
+    return {
+      session: null,
+      response: Response.json(
+        { error: "本次访问尚未通过服务端校验" },
+        { status: 401 },
+      ),
+    };
+  }
+  return { session, response: null };
+}
+
+export async function GET(request: Request) {
   try {
     await ensureVaultSchema();
+    const authorization = await authorize(request);
+    if (authorization.response) return authorization.response;
+
     const db = getDb();
     const [entries, devices, settingsRows] = await Promise.all([
       db
@@ -26,6 +45,8 @@ export async function GET() {
           account: vaultEntries.account,
           category: vaultEntries.category,
           securityStatus: vaultEntries.securityStatus,
+          passwordCipher: vaultEntries.passwordCipher,
+          passwordIv: vaultEntries.passwordIv,
           updatedAt: vaultEntries.updatedAt,
         })
         .from(vaultEntries)
@@ -41,13 +62,23 @@ export async function GET() {
         .limit(1),
     ]);
 
+    const settings = settingsRows[0];
     return Response.json({
       entries,
       devices,
-      settings: settingsRows[0] ?? {
-        twoFactorEnabled: true,
-        email: "w***@example.com",
-      },
+      settings: settings
+        ? {
+            twoFactorEnabled: settings.twoFactorEnabled,
+            email: settings.email,
+            maxFailedAttempts: settings.maxFailedAttempts,
+            lockoutMinutes: settings.lockoutMinutes,
+          }
+        : {
+            twoFactorEnabled: true,
+            email: "w***@example.com",
+            maxFailedAttempts: 5,
+            lockoutMinutes: 15,
+          },
     });
   } catch (error) {
     return errorResponse(error);
@@ -57,6 +88,11 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     await ensureVaultSchema();
+    const authorization = await authorize(request);
+    if (authorization.response || !authorization.session) {
+      return authorization.response;
+    }
+
     const payload = (await request.json()) as Record<string, unknown>;
     const action = String(payload.action ?? "");
     const db = getDb();
@@ -91,38 +127,31 @@ export async function POST(request: Request) {
       return Response.json({ ok: true }, { status: 201 });
     }
 
-    if (action === "add-device") {
-      const id = String(payload.id ?? "");
-      if (!id) {
-        return Response.json({ error: "设备 ID 不能为空" }, { status: 400 });
-      }
-
-      await db
-        .insert(trustedDevices)
-        .values({
-          id,
-          deviceName: String(payload.deviceName ?? "新设备"),
-          browser: String(payload.browser ?? "浏览器"),
-          location: String(payload.location ?? "未知位置"),
-          lastActive: "刚刚",
-          createdAt: new Date().toISOString().slice(0, 10),
-        })
-        .onConflictDoUpdate({
-          target: trustedDevices.id,
-          set: {
-            deviceName: String(payload.deviceName ?? "新设备"),
-            browser: String(payload.browser ?? "浏览器"),
-            location: String(payload.location ?? "未知位置"),
-            lastActive: "刚刚",
-          },
-        });
-      return Response.json({ ok: true }, { status: 201 });
-    }
-
     if (action === "set-two-factor") {
       await db
         .update(securitySettings)
         .set({ twoFactorEnabled: Boolean(payload.enabled) })
+        .where(eq(securitySettings.id, 1));
+      return Response.json({ ok: true });
+    }
+
+    if (action === "set-lockout-policy") {
+      const maxFailedAttempts = Number(payload.maxFailedAttempts);
+      const lockoutMinutes = Number(payload.lockoutMinutes);
+      if (
+        !Number.isInteger(maxFailedAttempts) ||
+        maxFailedAttempts < 2 ||
+        maxFailedAttempts > 10 ||
+        !Number.isInteger(lockoutMinutes) ||
+        lockoutMinutes < 1 ||
+        lockoutMinutes > 1440
+      ) {
+        return Response.json({ error: "锁定策略参数无效" }, { status: 400 });
+      }
+
+      await db
+        .update(securitySettings)
+        .set({ maxFailedAttempts, lockoutMinutes })
         .where(eq(securitySettings.id, 1));
       return Response.json({ ok: true });
     }
@@ -132,8 +161,20 @@ export async function POST(request: Request) {
       if (!id) {
         return Response.json({ error: "设备 ID 不能为空" }, { status: 400 });
       }
-      await db.delete(trustedDevices).where(eq(trustedDevices.id, id));
-      return Response.json({ ok: true });
+
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM trusted_devices WHERE id = ?").bind(id),
+        env.DB.prepare("DELETE FROM vault_sessions WHERE device_id = ?").bind(
+          id,
+        ),
+        env.DB.prepare("DELETE FROM login_attempts WHERE device_id = ?").bind(
+          id,
+        ),
+      ]);
+      return Response.json({
+        ok: true,
+        removedCurrentDevice: id === authorization.session.deviceId,
+      });
     }
 
     return Response.json({ error: "未知操作" }, { status: 400 });

@@ -20,10 +20,12 @@ test("builds the 钥密 unlock experience", async () => {
 });
 
 test("includes the requested security and device-management flows", async () => {
-  const [page, layout, schema] = await Promise.all([
+  const [page, layout, schema, unlockRoute, vaultRoute] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/auth/unlock/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/vault/route.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /验证新设备/);
@@ -34,4 +36,11 @@ test("includes the requested security and device-management flows", async () => 
   assert.match(layout, /钥密 · 安全密码管理器/);
   assert.match(schema, /trustedDevices/);
   assert.match(schema, /vaultEntries/);
+  assert.match(schema, /loginAttempts/);
+  assert.match(schema, /vaultSessions/);
+  assert.match(unlockRoute, /maxFailedAttempts/);
+  assert.match(unlockRoute, /lockedUntil/);
+  assert.match(unlockRoute, /createVaultSession/);
+  assert.match(vaultRoute, /getVaultSession/);
+  assert.match(page, /密码错误锁定策略/);
 });

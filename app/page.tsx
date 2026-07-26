@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 
 type Phase = "locked" | "verify" | "vault";
 type AppView = "vault" | "settings";
@@ -11,6 +11,8 @@ type VaultEntry = {
   account: string;
   category: string;
   securityStatus: string;
+  passwordCipher: string;
+  passwordIv: string;
   updatedAt: string;
 };
 
@@ -29,11 +31,11 @@ type VaultPayload = {
   settings: {
     twoFactorEnabled: boolean;
     email: string;
+    maxFailedAttempts: number;
+    lockoutMinutes: number;
   };
 };
 
-const MASTER_PASSWORD_HASH =
-  "c079208ec8d20c1aab38ffdc12de7252735ba1ab334e19b56bc1c237f89aaced";
 const DEMO_CODE = "246810";
 
 const defaultPayload: VaultPayload = {
@@ -42,6 +44,8 @@ const defaultPayload: VaultPayload = {
   settings: {
     twoFactorEnabled: true,
     email: "w***@example.com",
+    maxFailedAttempts: 5,
+    lockoutMinutes: 15,
   },
 };
 
@@ -59,14 +63,6 @@ function bytesToBase64(bytes: Uint8Array) {
     binary += String.fromCharCode(byte);
   });
   return btoa(binary);
-}
-
-async function sha256(value: string) {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 async function encryptSecret(secret: string, masterPassword: string) {
@@ -138,9 +134,13 @@ export default function Home() {
   const [unlockError, setUnlockError] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
   const [verificationError, setVerificationError] = useState("");
+  const [verificationChallenge, setVerificationChallenge] = useState("");
   const [deviceId, setDeviceId] = useState("");
+  const [sessionToken, setSessionToken] = useState("");
   const [toast, setToast] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [lockedUntil, setLockedUntil] = useState<number | null>(null);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<TrustedDevice | null>(null);
 
   const [passwordLength, setPasswordLength] = useState(20);
@@ -158,16 +158,17 @@ export default function Home() {
     password: "",
   });
 
-  const fetchVault = useCallback(async () => {
+  const fetchVault = useCallback(async (token: string) => {
     try {
-      const response = await fetch("/api/vault", { cache: "no-store" });
+      const response = await fetch("/api/vault", {
+        cache: "no-store",
+        headers: { authorization: `Bearer ${token}` },
+      });
       if (!response.ok) throw new Error("vault request failed");
       const payload = (await response.json()) as VaultPayload;
       setVault(payload);
     } catch {
       setToast("暂时无法读取密码库，请稍后重试");
-    } finally {
-      setLoading(false);
     }
   }, []);
 
@@ -186,8 +187,7 @@ export default function Home() {
         symbols: true,
       }),
     );
-    void fetchVault();
-  }, [fetchVault, passwordLength]);
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -195,10 +195,24 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const isTrustedDevice = useMemo(
-    () => vault.devices.some((device) => device.id === deviceId),
-    [deviceId, vault.devices],
-  );
+  useEffect(() => {
+    if (!lockedUntil) {
+      setLockoutRemaining(0);
+      return;
+    }
+
+    const updateRemaining = () => {
+      const remaining = Math.max(
+        0,
+        Math.ceil((lockedUntil - Date.now()) / 1000),
+      );
+      setLockoutRemaining(remaining);
+      if (!remaining) setLockedUntil(null);
+    };
+    updateRemaining();
+    const timer = window.setInterval(updateRemaining, 1000);
+    return () => window.clearInterval(timer);
+  }, [lockedUntil]);
 
   const regenerate = useCallback(() => {
     setGeneratedPassword(makePassword(passwordLength, passwordOptions));
@@ -213,50 +227,128 @@ export default function Home() {
   async function postVault(body: Record<string, unknown>) {
     const response = await fetch("/api/vault", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${sessionToken}`,
+      },
       body: JSON.stringify(body),
     });
+    if (response.status === 401) {
+      setSessionToken("");
+      setVault(defaultPayload);
+      setPhase("locked");
+      throw new Error("本次访问已过期，请重新输入主密码");
+    }
     if (!response.ok) throw new Error("保存失败");
     return response.json();
   }
 
   async function handleUnlock(event: FormEvent) {
     event.preventDefault();
+    if (lockoutRemaining > 0) return;
     setUnlockError("");
-    const digest = await sha256(masterPassword);
-    if (digest !== MASTER_PASSWORD_HASH) {
-      setUnlockError("主密码不正确，请重新输入");
-      return;
-    }
+    setLoading(true);
+    try {
+      const response = await fetch("/api/auth/unlock", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          deviceId,
+          masterPassword,
+          deviceName: "Windows 桌面设备",
+          browser: "Codex 浏览器",
+          location: "当前网络",
+        }),
+      });
+      const result = (await response.json()) as {
+        error?: string;
+        attemptsRemaining?: number;
+        lockedUntil?: string;
+        remainingSeconds?: number;
+        needsVerification?: boolean;
+        challengeToken?: string;
+        email?: string;
+        sessionToken?: string;
+      };
 
-    if (vault.settings.twoFactorEnabled && !isTrustedDevice) {
-      setPhase("verify");
-    } else {
+      if (!response.ok) {
+        if (response.status === 423) {
+          const lockTimestamp = result.lockedUntil
+            ? Date.parse(result.lockedUntil)
+            : Date.now() + (result.remainingSeconds ?? 60) * 1000;
+          setLockedUntil(lockTimestamp);
+        }
+        const attempts =
+          typeof result.attemptsRemaining === "number"
+            ? `，还可尝试 ${result.attemptsRemaining} 次`
+            : "";
+        setUnlockError(`${result.error ?? "服务端校验失败"}${attempts}`);
+        return;
+      }
+
+      if (result.needsVerification && result.challengeToken) {
+        setVerificationChallenge(result.challengeToken);
+        setVault((current) => ({
+          ...current,
+          settings: {
+            ...current.settings,
+            email: result.email ?? current.settings.email,
+          },
+        }));
+        setPhase("verify");
+        return;
+      }
+
+      if (!result.sessionToken) {
+        setUnlockError("服务端未返回访问凭证，请重试");
+        return;
+      }
+
+      setSessionToken(result.sessionToken);
+      await fetchVault(result.sessionToken);
       setPhase("vault");
+      setToast("服务端校验通过");
+    } catch {
+      setUnlockError("暂时无法连接验证服务，请稍后重试");
+    } finally {
+      setLoading(false);
     }
   }
 
   async function handleVerify(event: FormEvent) {
     event.preventDefault();
-    if (verificationCode !== DEMO_CODE) {
-      setVerificationError("验证码不正确，请输入 246810");
-      return;
-    }
-
     setVerificationError("");
+    setLoading(true);
     try {
-      await postVault({
-        action: "add-device",
-        id: deviceId,
-        deviceName: "Windows 桌面设备",
-        browser: "Codex 浏览器",
-        location: "当前网络",
+      const response = await fetch("/api/auth/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          code: verificationCode,
+          challengeToken: verificationChallenge,
+          deviceId,
+          deviceName: "Windows 桌面设备",
+          browser: "Codex 浏览器",
+          location: "当前网络",
+        }),
       });
-      await fetchVault();
+      const result = (await response.json()) as {
+        error?: string;
+        sessionToken?: string;
+      };
+      if (!response.ok || !result.sessionToken) {
+        setVerificationError(result.error ?? "设备验证失败，请稍后重试");
+        return;
+      }
+
+      setSessionToken(result.sessionToken);
+      await fetchVault(result.sessionToken);
       setPhase("vault");
       setToast("新设备验证成功");
     } catch {
       setVerificationError("设备验证失败，请稍后重试");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -282,7 +374,7 @@ export default function Home() {
         category: "开发工具",
         password: "",
       });
-      await fetchVault();
+      await fetchVault(sessionToken);
       setToast("密码已加密保存");
     } catch {
       setToast("保存失败，请稍后重试");
@@ -295,7 +387,7 @@ export default function Home() {
         action: "set-two-factor",
         enabled: !vault.settings.twoFactorEnabled,
       });
-      await fetchVault();
+      await fetchVault(sessionToken);
       setToast(
         vault.settings.twoFactorEnabled
           ? "新设备二次验证已关闭"
@@ -306,15 +398,36 @@ export default function Home() {
     }
   }
 
+  async function handleLockoutPolicy(
+    maxFailedAttempts: number,
+    lockoutMinutes: number,
+  ) {
+    try {
+      await postVault({
+        action: "set-lockout-policy",
+        maxFailedAttempts,
+        lockoutMinutes,
+      });
+      await fetchVault(sessionToken);
+      setToast("密码错误锁定策略已更新");
+    } catch {
+      setToast("锁定策略更新失败");
+    }
+  }
+
   async function confirmDeviceDeletion() {
     if (!deleteTarget) return;
     try {
       await postVault({ action: "delete-device", id: deleteTarget.id });
       const removedCurrentDevice = deleteTarget.id === deviceId;
       setDeleteTarget(null);
-      await fetchVault();
+      await fetchVault(sessionToken);
       if (removedCurrentDevice) {
-        window.localStorage.removeItem("yuemi-device-id");
+        const nextDeviceId = crypto.randomUUID();
+        window.localStorage.setItem("yuemi-device-id", nextDeviceId);
+        setDeviceId(nextDeviceId);
+        setSessionToken("");
+        setVault(defaultPayload);
         setMasterPassword("");
         setPhase("locked");
         setView("vault");
@@ -345,6 +458,10 @@ export default function Home() {
             <h1 id="unlock-title">解锁钥密</h1>
             <p>请输入主密码进入你的加密密码库</p>
           </div>
+          <div className="server-check-note">
+            <span aria-hidden="true" />
+            每次进入都会由服务端重新校验
+          </div>
           <form onSubmit={handleUnlock} className="auth-form">
             <label htmlFor="master-password">主密码</label>
             <div className="input-with-icon">
@@ -360,8 +477,18 @@ export default function Home() {
               <span aria-hidden="true">◉</span>
             </div>
             {unlockError ? <p className="form-error">{unlockError}</p> : null}
-            <button className="primary-button" type="submit" disabled={loading}>
-              {loading ? "正在准备密码库…" : "解锁并进入"}
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={loading || lockoutRemaining > 0}
+            >
+              {lockoutRemaining > 0
+                ? `已锁定 ${Math.floor(lockoutRemaining / 60)}:${String(
+                    lockoutRemaining % 60,
+                  ).padStart(2, "0")}`
+                : loading
+                  ? "服务端校验中…"
+                  : "解锁并进入"}
             </button>
           </form>
           <button className="text-button" type="button">
@@ -374,8 +501,8 @@ export default function Home() {
           <div className="security-note">
             <ShieldMark small />
             <div>
-              <strong>本机数据已加密保护</strong>
-              <span>主密码不会离开此设备</span>
+              <strong>服务端访问门禁已开启</strong>
+              <span>校验成功后才能读取加密密码库</span>
             </div>
           </div>
         </section>
@@ -507,6 +634,8 @@ export default function Home() {
               aria-label="锁定密码库"
               onClick={() => {
                 setMasterPassword("");
+                setSessionToken("");
+                setVault(defaultPayload);
                 setPhase("locked");
               }}
             >
@@ -534,6 +663,7 @@ export default function Home() {
             vault={vault}
             deviceId={deviceId}
             handleToggleTwoFactor={handleToggleTwoFactor}
+            handleLockoutPolicy={handleLockoutPolicy}
             setDeleteTarget={setDeleteTarget}
           />
         )}
@@ -842,11 +972,16 @@ function SettingsView({
   vault,
   deviceId,
   handleToggleTwoFactor,
+  handleLockoutPolicy,
   setDeleteTarget,
 }: {
   vault: VaultPayload;
   deviceId: string;
   handleToggleTwoFactor: () => void;
+  handleLockoutPolicy: (
+    maxFailedAttempts: number,
+    lockoutMinutes: number,
+  ) => void;
   setDeleteTarget: (device: TrustedDevice) => void;
 }) {
   return (
@@ -873,7 +1008,7 @@ function SettingsView({
           </button>
         </div>
         <p className="settings-description">
-          开启后，新设备需要通过邮箱验证码确认身份；关闭后，新设备仅需主密码即可进入。
+          所有设备每次进入都会由服务端重新校验主密码；开启后，新设备还需要邮箱验证码确认身份。
         </p>
         <div className="verified-row">
           <div>
@@ -887,6 +1022,66 @@ function SettingsView({
           <p>
             建议保持开启。即使主密码泄露，新设备仍无法直接读取你的密码库。
           </p>
+        </div>
+      </section>
+
+      <section className="panel settings-panel lockout-panel">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">防暴力破解</span>
+            <h2>密码错误锁定策略</h2>
+          </div>
+          <span className="policy-status">服务端强制执行</span>
+        </div>
+        <p className="settings-description">
+          同一设备连续输错达到设定次数后，将在设定时间内无法再次访问；刷新页面也不会解除锁定。
+        </p>
+        <div className="lockout-policy-grid">
+          <label>
+            允许错误次数
+            <select
+              aria-label="允许错误次数"
+              value={vault.settings.maxFailedAttempts}
+              onChange={(event) =>
+                handleLockoutPolicy(
+                  Number(event.target.value),
+                  vault.settings.lockoutMinutes,
+                )
+              }
+            >
+              <option value="2">2 次</option>
+              <option value="3">3 次</option>
+              <option value="5">5 次</option>
+              <option value="8">8 次</option>
+              <option value="10">10 次</option>
+            </select>
+          </label>
+          <label>
+            锁定时长
+            <select
+              aria-label="密码错误锁定时长"
+              value={vault.settings.lockoutMinutes}
+              onChange={(event) =>
+                handleLockoutPolicy(
+                  vault.settings.maxFailedAttempts,
+                  Number(event.target.value),
+                )
+              }
+            >
+              <option value="1">1 分钟</option>
+              <option value="5">5 分钟</option>
+              <option value="15">15 分钟</option>
+              <option value="30">30 分钟</option>
+              <option value="60">1 小时</option>
+              <option value="1440">24 小时</option>
+            </select>
+          </label>
+        </div>
+        <div className="policy-summary">
+          当前策略：连续输错
+          <strong>{vault.settings.maxFailedAttempts} 次</strong>
+          后锁定
+          <strong>{vault.settings.lockoutMinutes} 分钟</strong>
         </div>
       </section>
 

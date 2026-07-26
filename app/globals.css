@@ -174,6 +174,27 @@ textarea:focus-visible {
   margin: 12px 0 0;
 }
 
+.server-check-note {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: -12px 0 20px;
+  padding: 10px 12px;
+  border: 1px solid rgba(47, 212, 157, 0.18);
+  border-radius: 10px;
+  color: #a9e8d2;
+  background: rgba(47, 212, 157, 0.07);
+  font-size: 12px;
+}
+
+.server-check-note span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 12px var(--green);
+}
+
 .verified-email {
   display: block;
   margin-top: 9px;
@@ -892,6 +913,48 @@ textarea {
   font-size: 13px;
 }
 
+.policy-status {
+  padding: 7px 11px;
+  border: 1px solid rgba(47, 212, 157, 0.24);
+  border-radius: 999px;
+  color: var(--green);
+  background: var(--green-soft);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.lockout-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.lockout-policy-grid label {
+  display: grid;
+  gap: 8px;
+  color: #c6d1df;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.policy-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 15px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.018);
+  font-size: 12px;
+}
+
+.policy-summary strong {
+  color: var(--text);
+}
+
 .large-switch {
   width: 54px;
   height: 30px;
@@ -1218,6 +1281,10 @@ textarea {
   .verified-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .lockout-policy-grid {
+    grid-template-columns: 1fr;
   }
 }
 
