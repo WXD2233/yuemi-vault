@@ -1010,7 +1010,8 @@ function VaultView({
           <label className="category-field">
             分类
             <input
-              list="recommended-categories"
+              type="text"
+              autoComplete="off"
               value={entryForm.category}
               onChange={(event) =>
                 setEntryForm((current) => ({
@@ -1020,11 +1021,6 @@ function VaultView({
               }
               placeholder="选择推荐分类或输入自定义分类"
             />
-            <datalist id="recommended-categories">
-              {recommendedCategories.map((category) => (
-                <option key={category} value={category} />
-              ))}
-            </datalist>
           </label>
           <div className="category-suggestions" aria-label="推荐分类">
             <span>推荐</span>
