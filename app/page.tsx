@@ -792,7 +792,21 @@ function VaultView({
               value={passwordLength}
               onChange={(event) => setPasswordLength(Number(event.target.value))}
             />
-            <output>{passwordLength}</output>
+            <input
+              className="length-number"
+              type="number"
+              inputMode="numeric"
+              min="8"
+              max="40"
+              step="1"
+              aria-label="密码长度数值"
+              value={passwordLength}
+              onChange={(event) => {
+                const value = event.target.valueAsNumber;
+                if (Number.isNaN(value)) return;
+                setPasswordLength(Math.min(40, Math.max(8, Math.round(value))));
+              }}
+            />
           </div>
           <div className="option-grid">
             {[

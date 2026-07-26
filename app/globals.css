@@ -636,7 +636,7 @@ textarea {
 
 .length-row {
   display: grid;
-  grid-template-columns: auto minmax(120px, 1fr) 42px;
+  grid-template-columns: auto minmax(120px, 1fr) 64px;
   align-items: center;
   gap: 16px;
   margin-top: 18px;
@@ -650,11 +650,14 @@ textarea {
   border: 0;
 }
 
-.length-row output {
-  padding: 6px;
+.length-number {
+  min-width: 0;
+  height: 36px;
+  padding: 6px 5px;
   border: 1px solid var(--border);
   border-radius: 7px;
   text-align: center;
+  font-weight: 700;
 }
 
 .option-grid {
@@ -1348,7 +1351,7 @@ textarea {
   }
 
   .length-row {
-    grid-template-columns: 1fr 44px;
+    grid-template-columns: 1fr 60px;
     gap: 10px;
   }
 
