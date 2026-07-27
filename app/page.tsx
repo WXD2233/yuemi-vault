@@ -4,7 +4,13 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 
 type Phase = "locked" | "verify" | "vault";
 type AppView = "vault" | "records" | "settings";
-type ThemePreference = "dark" | "light" | "system";
+type ThemePreference =
+  | "dark"
+  | "light"
+  | "violet"
+  | "glacier"
+  | "amber"
+  | "system";
 
 type VaultEntry = {
   id: string;
@@ -39,6 +45,52 @@ type VaultPayload = {
 };
 
 const DEMO_CODE = "246810";
+
+const themeOptions: Array<{
+  value: ThemePreference;
+  label: string;
+  description: string;
+  icon: string;
+}> = [
+  {
+    value: "dark",
+    label: "深海深色",
+    description: "经典安全深色界面",
+    icon: "☾",
+  },
+  {
+    value: "light",
+    label: "薄荷浅色",
+    description: "清爽柔和的浅色界面",
+    icon: "☀",
+  },
+  {
+    value: "violet",
+    label: "银河紫",
+    description: "紫色霓光科技氛围",
+    icon: "◆",
+  },
+  {
+    value: "glacier",
+    label: "冰川蓝",
+    description: "冷静明亮的蓝色界面",
+    icon: "❄",
+  },
+  {
+    value: "amber",
+    label: "石墨琥珀",
+    description: "沉稳温暖的金色质感",
+    icon: "◉",
+  },
+  {
+    value: "system",
+    label: "跟随系统",
+    description: "自动匹配当前设备",
+    icon: "◐",
+  },
+];
+
+const themeValues = themeOptions.map((option) => option.value);
 
 const defaultPayload: VaultPayload = {
   entries: [],
@@ -241,12 +293,8 @@ export default function Home() {
 
   useEffect(() => {
     const savedTheme = window.localStorage.getItem("yuemi-theme");
-    if (
-      savedTheme === "dark" ||
-      savedTheme === "light" ||
-      savedTheme === "system"
-    ) {
-      setTheme(savedTheme);
+    if (themeValues.includes(savedTheme as ThemePreference)) {
+      setTheme(savedTheme as ThemePreference);
     }
     setThemeLoaded(true);
   }, []);
@@ -260,7 +308,10 @@ export default function Home() {
         theme === "system" ? (systemTheme.matches ? "dark" : "light") : theme;
       document.documentElement.dataset.theme = resolvedTheme;
       document.documentElement.dataset.themePreference = theme;
-      document.documentElement.style.colorScheme = resolvedTheme;
+      document.documentElement.style.colorScheme =
+        resolvedTheme === "light" || resolvedTheme === "glacier"
+          ? "light"
+          : "dark";
     };
 
     applyTheme();
@@ -749,25 +800,19 @@ export default function Home() {
               className="theme-quick-button"
               type="button"
               aria-label={`切换界面主题，当前为${
-                theme === "dark"
-                  ? "深色"
-                  : theme === "light"
-                    ? "浅色"
-                    : "跟随系统"
+                themeOptions.find((option) => option.value === theme)?.label
               }`}
               title="切换界面主题"
-              onClick={() =>
-                setTheme((current) =>
-                  current === "dark"
-                    ? "light"
-                    : current === "light"
-                      ? "system"
-                      : "dark",
-                )
-              }
+              onClick={() => {
+                const currentIndex = themeValues.indexOf(theme);
+                setTheme(themeValues[(currentIndex + 1) % themeValues.length]);
+              }}
             >
               <span aria-hidden="true">
-                {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
+                {
+                  themeOptions.find((option) => option.value === theme)
+                    ?.icon
+                }
               </span>
             </button>
             <span className="status-pill">
@@ -1564,25 +1609,7 @@ function SettingsView({
           role="radiogroup"
           aria-label="界面主题"
         >
-          {(
-            [
-              {
-                value: "dark",
-                label: "深色",
-                description: "低光环境更舒适",
-              },
-              {
-                value: "light",
-                label: "浅色",
-                description: "明亮清晰的界面",
-              },
-              {
-                value: "system",
-                label: "跟随系统",
-                description: "自动匹配当前设备",
-              },
-            ] as const
-          ).map((option) => (
+          {themeOptions.map((option) => (
             <button
               className={
                 theme === option.value ? "theme-option active" : "theme-option"
