@@ -34,7 +34,7 @@ export async function hashMasterPassword(value: string) {
       name: "PBKDF2",
       hash: "SHA-256",
       salt: new TextEncoder().encode("yuemi-master-v1"),
-      iterations: 210_000,
+      iterations: 100_000,
     },
     keyMaterial,
     256,

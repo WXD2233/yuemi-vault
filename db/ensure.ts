@@ -1,6 +1,8 @@
 import { env } from "cloudflare:workers";
 
 const MASTER_PASSWORD_HASH =
+  "8feb66c7949b28c70e3e2782a43b08cdec387a3f9fb24ac3877980084ac7f14c";
+const PREVIOUS_MASTER_PASSWORD_HASH =
   "3651389d80ea709f76a95ec93ca42343eb35a31525020cc9b7a58100159a139c";
 const LEGACY_MASTER_PASSWORD_HASH =
   "c079208ec8d20c1aab38ffdc12de7252735ba1ab334e19b56bc1c237f89aaced";
@@ -106,9 +108,13 @@ export async function ensureVaultSchema() {
   }
 
   await env.DB.prepare(
-    "UPDATE security_settings SET master_password_hash = ? WHERE id = 1 AND master_password_hash = ?",
+    "UPDATE security_settings SET master_password_hash = ? WHERE id = 1 AND master_password_hash IN (?, ?)",
   )
-    .bind(MASTER_PASSWORD_HASH, LEGACY_MASTER_PASSWORD_HASH)
+    .bind(
+      MASTER_PASSWORD_HASH,
+      PREVIOUS_MASTER_PASSWORD_HASH,
+      LEGACY_MASTER_PASSWORD_HASH,
+    )
     .run();
 
   const entryCount = await env.DB.prepare(

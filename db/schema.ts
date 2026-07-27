@@ -31,7 +31,7 @@ export const securitySettings = sqliteTable("security_settings", {
   masterPasswordHash: text("master_password_hash")
     .notNull()
     .default(
-      "3651389d80ea709f76a95ec93ca42343eb35a31525020cc9b7a58100159a139c",
+      "8feb66c7949b28c70e3e2782a43b08cdec387a3f9fb24ac3877980084ac7f14c",
     ),
   maxFailedAttempts: integer("max_failed_attempts").notNull().default(5),
   lockoutMinutes: integer("lockout_minutes").notNull().default(15),
