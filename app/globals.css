@@ -662,8 +662,8 @@ textarea {
 .vault-layout {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 380px);
-  gap: 24px;
+  grid-template-columns: 1fr;
+  gap: 20px;
   align-items: start;
 }
 
@@ -1066,8 +1066,7 @@ textarea {
 }
 
 .add-entry-panel {
-  position: sticky;
-  top: 20px;
+  position: static;
 }
 
 .panel-plus {
@@ -1886,27 +1885,6 @@ textarea {
 
 .toast span {
   color: var(--green);
-}
-
-@media (max-width: 1500px) {
-  .workspace {
-    padding-inline: 20px;
-  }
-
-  .vault-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(320px, 340px);
-    gap: 18px;
-  }
-}
-
-@media (max-width: 1120px) {
-  .vault-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .add-entry-panel {
-    position: static;
-  }
 }
 
 @media (max-width: 760px) {

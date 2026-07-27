@@ -63,5 +63,9 @@ test("supports persistent color themes and system matching", async () => {
   assert.match(styles, /:root\[data-theme="glacier"\]/);
   assert.match(styles, /:root\[data-theme="amber"\]/);
   assert.match(styles, /\.theme-options/);
-  assert.match(styles, /@media \(max-width: 1120px\)/);
+  assert.match(styles, /\.vault-layout[\s\S]*grid-template-columns: 1fr/);
+  assert.doesNotMatch(
+    styles,
+    /grid-template-columns: minmax\(0, 1fr\) minmax\(320px, 340px\)/,
+  );
 });
