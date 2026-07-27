@@ -17,6 +17,24 @@
   --shadow: 0 28px 90px rgba(0, 0, 0, 0.32);
 }
 
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5faf8;
+  --bg-deep: #edf5f3;
+  --panel: rgba(255, 255, 255, 0.9);
+  --panel-strong: #ffffff;
+  --border: rgba(31, 74, 69, 0.13);
+  --border-strong: rgba(31, 74, 69, 0.23);
+  --text: #142723;
+  --muted: #637871;
+  --green: #0ea978;
+  --green-bright: #087e5b;
+  --green-soft: rgba(14, 169, 120, 0.11);
+  --danger: #df574c;
+  --danger-soft: rgba(223, 87, 76, 0.1);
+  --shadow: 0 24px 70px rgba(34, 68, 63, 0.14);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -37,6 +55,13 @@ body {
   color: var(--text);
   font-family:
     Inter, "PingFang SC", "Microsoft YaHei", Arial, Helvetica, sans-serif;
+}
+
+:root[data-theme="light"] body {
+  background:
+    radial-gradient(circle at 78% 16%, rgba(95, 201, 171, 0.17), transparent 32%),
+    radial-gradient(circle at 20% 80%, rgba(99, 157, 208, 0.11), transparent 35%),
+    var(--bg-deep);
 }
 
 button,
@@ -505,6 +530,27 @@ textarea {
   display: flex;
   align-items: center;
   gap: 14px;
+}
+
+.theme-quick-button {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--green-bright);
+  background: var(--green-soft);
+  font-size: 19px;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.theme-quick-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(47, 212, 157, 0.35);
 }
 
 .status-pill,
@@ -1026,6 +1072,214 @@ textarea {
   margin: 0 auto;
 }
 
+.theme-device-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.theme-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.theme-option {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 13px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.018);
+  text-align: left;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.theme-option:hover {
+  transform: translateY(-1px);
+  border-color: rgba(47, 212, 157, 0.34);
+}
+
+.theme-option.active {
+  border-color: var(--green);
+  background: var(--green-soft);
+  box-shadow: inset 0 0 0 1px rgba(47, 212, 157, 0.08);
+}
+
+.theme-preview {
+  position: relative;
+  width: 74px;
+  height: 49px;
+  overflow: hidden;
+  display: block;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+}
+
+.theme-preview::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 17px;
+  background: #071522;
+}
+
+.theme-preview i,
+.theme-preview b,
+.theme-preview em {
+  position: absolute;
+  left: 24px;
+  right: 7px;
+  display: block;
+  border-radius: 3px;
+}
+
+.theme-preview i {
+  top: 8px;
+  height: 7px;
+  background: #2fd49d;
+}
+
+.theme-preview b {
+  top: 20px;
+  height: 8px;
+  background: #23374a;
+}
+
+.theme-preview em {
+  top: 33px;
+  height: 6px;
+  background: #31485c;
+}
+
+.theme-preview-dark {
+  background: #0b1a2b;
+}
+
+.theme-preview-light {
+  background: #f4faf8;
+}
+
+.theme-preview-light::before {
+  background: #dfece8;
+}
+
+.theme-preview-light b {
+  background: #b9cbc6;
+}
+
+.theme-preview-light em {
+  background: #d0deda;
+}
+
+.theme-preview-system {
+  background: linear-gradient(90deg, #0b1a2b 50%, #f4faf8 50%);
+}
+
+.theme-preview-system::before {
+  background: linear-gradient(90deg, #071522 50%, #dfece8 50%);
+}
+
+.theme-option-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.theme-option-copy strong {
+  font-size: 13px;
+}
+
+.theme-option-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theme-check {
+  width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: #05251b;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.theme-option.active .theme-check {
+  border-color: var(--green);
+  background: var(--green);
+}
+
+:root[data-theme="light"] .auth-card {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(242, 249, 247, 0.97)),
+    var(--panel-strong);
+}
+
+:root[data-theme="light"] .sidebar {
+  background: rgba(247, 251, 250, 0.9);
+}
+
+:root[data-theme="light"] .panel {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(241, 248, 246, 0.91)),
+    var(--panel);
+}
+
+:root[data-theme="light"] input,
+:root[data-theme="light"] select,
+:root[data-theme="light"] textarea,
+:root[data-theme="light"] .generated-row code,
+:root[data-theme="light"] .secret-display code {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+:root[data-theme="light"] .auth-form label,
+:root[data-theme="light"] .entry-form label,
+:root[data-theme="light"] .edit-entry-form label,
+:root[data-theme="light"] .lockout-policy-grid label,
+:root[data-theme="light"] .length-row,
+:root[data-theme="light"] .option-card,
+:root[data-theme="light"] .table-row,
+:root[data-theme="light"] .secret-notes p,
+:root[data-theme="light"] .security-callout {
+  color: #405c55;
+}
+
+:root[data-theme="light"] .nav-item,
+:root[data-theme="light"] .muted-account,
+:root[data-theme="light"] .date-cell {
+  color: #617770;
+}
+
+:root[data-theme="light"] .confirm-modal,
+:root[data-theme="light"] .password-modal {
+  background: #ffffff;
+}
+
+:root[data-theme="light"] .modal-backdrop {
+  background: rgba(31, 50, 48, 0.42);
+}
+
+:root[data-theme="light"] .toast {
+  color: #e9fff7;
+  background: rgba(8, 91, 66, 0.95);
+}
+
 .settings-description {
   margin: 12px 0 20px;
   font-size: 13px;
@@ -1493,6 +1747,10 @@ textarea {
     background: rgba(5, 15, 27, 0.96);
   }
 
+  :root[data-theme="light"] .sidebar {
+    background: rgba(247, 251, 250, 0.97);
+  }
+
   .sidebar-brand,
   .sidebar-security {
     display: none;
@@ -1501,6 +1759,10 @@ textarea {
   .sidebar nav {
     grid-template-columns: repeat(3, 1fr);
     gap: 4px;
+  }
+
+  .theme-options {
+    grid-template-columns: 1fr;
   }
 
   .nav-item {
@@ -1730,6 +1992,18 @@ textarea {
 
   .option-grid {
     grid-template-columns: 1fr;
+  }
+
+  .theme-options {
+    grid-template-columns: 1fr;
+  }
+
+  .theme-option {
+    grid-template-columns: 66px minmax(0, 1fr) 24px;
+  }
+
+  .theme-preview {
+    width: 66px;
   }
 
   .generated-row {

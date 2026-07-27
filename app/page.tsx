@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 
 type Phase = "locked" | "verify" | "vault";
 type AppView = "vault" | "records" | "settings";
+type ThemePreference = "dark" | "light" | "system";
 
 type VaultEntry = {
   id: string;
@@ -188,6 +189,8 @@ export default function Home() {
   const [lockedUntil, setLockedUntil] = useState<number | null>(null);
   const [lockoutRemaining, setLockoutRemaining] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<TrustedDevice | null>(null);
+  const [theme, setTheme] = useState<ThemePreference>("system");
+  const [themeLoaded, setThemeLoaded] = useState(false);
 
   const [passwordLength, setPasswordLength] = useState(20);
   const [passwordOptions, setPasswordOptions] = useState({
@@ -235,6 +238,36 @@ export default function Home() {
       }),
     );
   }, []);
+
+  useEffect(() => {
+    const savedTheme = window.localStorage.getItem("yuemi-theme");
+    if (
+      savedTheme === "dark" ||
+      savedTheme === "light" ||
+      savedTheme === "system"
+    ) {
+      setTheme(savedTheme);
+    }
+    setThemeLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!themeLoaded) return;
+
+    const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      const resolvedTheme =
+        theme === "system" ? (systemTheme.matches ? "dark" : "light") : theme;
+      document.documentElement.dataset.theme = resolvedTheme;
+      document.documentElement.dataset.themePreference = theme;
+      document.documentElement.style.colorScheme = resolvedTheme;
+    };
+
+    applyTheme();
+    window.localStorage.setItem("yuemi-theme", theme);
+    systemTheme.addEventListener("change", applyTheme);
+    return () => systemTheme.removeEventListener("change", applyTheme);
+  }, [theme, themeLoaded]);
 
   useEffect(() => {
     if (!toast) return;
@@ -712,6 +745,31 @@ export default function Home() {
             </h1>
           </div>
           <div className="topbar-actions">
+            <button
+              className="theme-quick-button"
+              type="button"
+              aria-label={`切换界面主题，当前为${
+                theme === "dark"
+                  ? "深色"
+                  : theme === "light"
+                    ? "浅色"
+                    : "跟随系统"
+              }`}
+              title="切换界面主题"
+              onClick={() =>
+                setTheme((current) =>
+                  current === "dark"
+                    ? "light"
+                    : current === "light"
+                      ? "system"
+                      : "dark",
+                )
+              }
+            >
+              <span aria-hidden="true">
+                {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
+              </span>
+            </button>
             <span className="status-pill">
               <i />
               已安全连接
@@ -753,6 +811,8 @@ export default function Home() {
           <SettingsView
             vault={vault}
             deviceId={deviceId}
+            theme={theme}
+            setTheme={setTheme}
             handleToggleTwoFactor={handleToggleTwoFactor}
             handleLockoutPolicy={handleLockoutPolicy}
             setDeleteTarget={setDeleteTarget}
@@ -1469,12 +1529,16 @@ function VaultView({
 function SettingsView({
   vault,
   deviceId,
+  theme,
+  setTheme,
   handleToggleTwoFactor,
   handleLockoutPolicy,
   setDeleteTarget,
 }: {
   vault: VaultPayload;
   deviceId: string;
+  theme: ThemePreference;
+  setTheme: (theme: ThemePreference) => void;
   handleToggleTwoFactor: () => void;
   handleLockoutPolicy: (
     maxFailedAttempts: number,
@@ -1484,6 +1548,71 @@ function SettingsView({
 }) {
   return (
     <div className="settings-layout">
+      <section className="panel settings-panel theme-panel">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">个性化</span>
+            <h2>界面主题</h2>
+          </div>
+          <span className="theme-device-note">仅保存在当前设备</span>
+        </div>
+        <p className="settings-description">
+          选择更舒适的显示方式；使用“跟随系统”时，会自动匹配设备的深浅色设置。
+        </p>
+        <div
+          className="theme-options"
+          role="radiogroup"
+          aria-label="界面主题"
+        >
+          {(
+            [
+              {
+                value: "dark",
+                label: "深色",
+                description: "低光环境更舒适",
+              },
+              {
+                value: "light",
+                label: "浅色",
+                description: "明亮清晰的界面",
+              },
+              {
+                value: "system",
+                label: "跟随系统",
+                description: "自动匹配当前设备",
+              },
+            ] as const
+          ).map((option) => (
+            <button
+              className={
+                theme === option.value ? "theme-option active" : "theme-option"
+              }
+              type="button"
+              role="radio"
+              aria-checked={theme === option.value}
+              key={option.value}
+              onClick={() => setTheme(option.value)}
+            >
+              <span
+                className={`theme-preview theme-preview-${option.value}`}
+                aria-hidden="true"
+              >
+                <i />
+                <b />
+                <em />
+              </span>
+              <span className="theme-option-copy">
+                <strong>{option.label}</strong>
+                <small>{option.description}</small>
+              </span>
+              <span className="theme-check" aria-hidden="true">
+                {theme === option.value ? "✓" : ""}
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
+
       <section className="panel settings-panel">
         <div className="section-heading">
           <div>

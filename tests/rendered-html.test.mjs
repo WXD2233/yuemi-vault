@@ -44,3 +44,18 @@ test("includes the requested security and device-management flows", async () => 
   assert.match(vaultRoute, /getVaultSession/);
   assert.match(page, /密码错误锁定策略/);
 });
+
+test("supports persistent light, dark, and system themes", async () => {
+  const [page, layout, styles] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /ThemePreference = "dark" \| "light" \| "system"/);
+  assert.match(page, /yuemi-theme/);
+  assert.match(page, /界面主题/);
+  assert.match(layout, /themeBootScript/);
+  assert.match(styles, /:root\[data-theme="light"\]/);
+  assert.match(styles, /\.theme-options/);
+});
