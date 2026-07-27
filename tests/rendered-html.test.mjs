@@ -63,4 +63,5 @@ test("supports persistent color themes and system matching", async () => {
   assert.match(styles, /:root\[data-theme="glacier"\]/);
   assert.match(styles, /:root\[data-theme="amber"\]/);
   assert.match(styles, /\.theme-options/);
+  assert.match(styles, /@media \(max-width: 1120px\)/);
 });

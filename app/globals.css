@@ -1888,17 +1888,24 @@ textarea {
   color: var(--green);
 }
 
-@media (max-width: 1380px) {
+@media (max-width: 1500px) {
+  .workspace {
+    padding-inline: 20px;
+  }
+
+  .vault-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 340px);
+    gap: 18px;
+  }
+}
+
+@media (max-width: 1120px) {
   .vault-layout {
     grid-template-columns: 1fr;
   }
 
   .add-entry-panel {
     position: static;
-  }
-
-  .option-grid {
-    grid-template-columns: repeat(2, 1fr);
   }
 }
 
