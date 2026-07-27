@@ -100,6 +100,9 @@ test("only exposes password recovery after a notification email is configured", 
   assert.match(page, /recoveryStep === "code"/);
   assert.match(page, /recoveryStep === "email"/);
   assert.match(page, /action: "set-recovery-email"/);
+  assert.match(page, /用于新设备验证和主密码找回/);
+  assert.match(page, /document\.getElementById\("notification-email"\)\?\.focus/);
+  assert.match(page, /result\.error \?\? "保存失败"/);
   assert.match(vaultRoute, /set-recovery-email/);
   assert.match(recoveryRoute, /const DEMO_CODE = "246810"/);
   assert.match(recoveryRoute, /const DEMO_MASTER_PASSWORD = "KeySafe2026!"/);

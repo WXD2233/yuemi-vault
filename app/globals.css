@@ -1484,6 +1484,28 @@ textarea {
   gap: 9px;
 }
 
+.login-protection-email-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 18px 0 10px;
+}
+
+.login-protection-email-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.login-protection-email-heading strong {
+  font-size: 13px;
+}
+
+.login-protection-email-heading span:not(.policy-status) {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .recovery-email-form label {
   color: #c6d1df;
   font-size: 12px;
@@ -2280,6 +2302,11 @@ textarea {
   .demo-hint,
   .form-row {
     flex-wrap: wrap;
+  }
+
+  .login-protection-email-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .table-footer,

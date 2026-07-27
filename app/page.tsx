@@ -499,14 +499,18 @@ export default function Home() {
       },
       body: JSON.stringify(body),
     });
+    const result = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      [key: string]: unknown;
+    };
     if (response.status === 401) {
       setSessionToken("");
       setVault(defaultPayload);
       setPhase("locked");
       throw new Error("本次访问已过期，请重新输入主密码");
     }
-    if (!response.ok) throw new Error("保存失败");
-    return response.json();
+    if (!response.ok) throw new Error(result.error ?? "保存失败");
+    return result;
   }
 
   async function handleUnlock(event: FormEvent) {
@@ -735,7 +739,7 @@ export default function Home() {
       !vault.settings.twoFactorEnabled &&
       !isNotificationEmailConfigured(vault.settings.email)
     ) {
-      setToast("请先在主密码找回中保存通知邮箱");
+      setToast("请先在登录保护中保存通知邮箱");
       return;
     }
     try {
@@ -749,8 +753,8 @@ export default function Home() {
           ? "新设备二次验证已关闭"
           : "新设备二次验证已开启",
       );
-    } catch {
-      setToast("设置更新失败");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "设置更新失败");
     }
   }
 
@@ -2115,7 +2119,17 @@ function SettingsView({
                 ? "large-switch enabled"
                 : "large-switch"
             }
-            onClick={handleToggleTwoFactor}
+            onClick={() => {
+              const needsEmail =
+                !vault.settings.twoFactorEnabled &&
+                !isNotificationEmailConfigured(vault.settings.email);
+              void handleToggleTwoFactor();
+              if (needsEmail) {
+                window.requestAnimationFrame(() => {
+                  document.getElementById("notification-email")?.focus();
+                });
+              }
+            }}
           >
             <i />
             <span className="sr-only">切换新设备二次验证</span>
@@ -2124,34 +2138,10 @@ function SettingsView({
         <p className="settings-description">
           所有设备每次进入都会由服务端重新校验主密码；开启后，新设备还需要邮箱验证码确认身份。
         </p>
-        <div className="verified-row">
+        <div className="login-protection-email-heading">
           <div>
-            <span>通知邮箱</span>
-            <strong>
-              {isNotificationEmailConfigured(vault.settings.email)
-                ? vault.settings.email
-                : "尚未录入"}
-            </strong>
-          </div>
-          <em>
-            {isNotificationEmailConfigured(vault.settings.email)
-              ? "✓ 已设置"
-              : "等待设置"}
-          </em>
-        </div>
-        <div className="security-callout">
-          <ShieldMark small />
-          <p>
-            建议保持开启。即使主密码泄露，新设备仍无法直接读取你的密码库。
-          </p>
-        </div>
-      </section>
-
-      <section className="panel settings-panel recovery-settings-panel">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">主密码找回</span>
-            <h2>通知邮箱</h2>
+            <strong>通知邮箱</strong>
+            <span>用于新设备验证和主密码找回</span>
           </div>
           <span
             className={
@@ -2161,13 +2151,10 @@ function SettingsView({
             }
           >
             {isNotificationEmailConfigured(vault.settings.email)
-              ? "登录页入口已开启"
-              : "找回入口未开启"}
+              ? "✓ 已设置"
+              : "启用前请先填写"}
           </span>
         </div>
-        <p className="settings-description">
-          录入有效通知邮箱后，登录页才会出现“忘记主密码”。找回时必须先通过两步验证码，再输入这里保存的完整邮箱。
-        </p>
         <form
           className="recovery-email-form"
           onSubmit={saveNotificationEmail}
@@ -2187,14 +2174,18 @@ function SettingsView({
               type="submit"
               disabled={savingEmail}
             >
-              {savingEmail ? "保存中…" : "保存邮箱"}
+              {savingEmail
+                ? "保存中…"
+                : notificationEmail.trim()
+                  ? "保存邮箱"
+                  : "移除邮箱"}
             </button>
           </div>
         </form>
         <div className="security-callout">
           <ShieldMark small />
           <p>
-            清空邮箱并保存即可关闭找回入口。通知邮箱仅用于新设备验证和主密码找回。
+            保存有效邮箱后即可修改上方开关，登录页也会出现“忘记主密码”。清空并保存会同时关闭这两项保护。
           </p>
         </div>
       </section>
