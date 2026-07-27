@@ -6,6 +6,8 @@ import {
   hashSecret,
 } from "../../../../db/auth";
 import { ensureVaultSchema } from "../../../../db/ensure";
+import { getReadySmtpConfig } from "../../../../db/smtp-config";
+import { sendSmtpMail } from "../../../../db/smtp";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +17,10 @@ type SecurityRow = {
   masterPasswordHash: string;
   maxFailedAttempts: number;
   lockoutMinutes: number;
+  smtpEnabled: number;
 };
+
+const FIXED_VERIFICATION_CODE = "246810";
 
 function isNotificationEmailConfigured(email: string) {
   return (
@@ -47,7 +52,8 @@ export async function POST(request: Request) {
         email,
         master_password_hash AS masterPasswordHash,
         max_failed_attempts AS maxFailedAttempts,
-        lockout_minutes AS lockoutMinutes
+        lockout_minutes AS lockoutMinutes,
+        smtp_enabled AS smtpEnabled
       FROM security_settings
       WHERE id = 1`,
     ).first<SecurityRow>();
@@ -137,6 +143,13 @@ export async function POST(request: Request) {
       isNotificationEmailConfigured(settings.email) &&
       !trustedDevice
     ) {
+      if (!settings.smtpEnabled) {
+        return Response.json(
+          { error: "新设备验证邮件尚未配置，请先在旧设备的设置中测试 SMTP" },
+          { status: 503 },
+        );
+      }
+
       const challengeToken = createOpaqueToken();
       const challengeHash = await hashSecret(challengeToken);
       const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
@@ -146,10 +159,43 @@ export async function POST(request: Request) {
         .bind(challengeHash, deviceId, expiresAt)
         .run();
 
+      try {
+        const smtp = await getReadySmtpConfig();
+        await sendSmtpMail({
+          host: smtp.host,
+          port: smtp.port,
+          username: smtp.username,
+          secret: smtp.secret,
+          fromName: smtp.fromName,
+          to: settings.email,
+          subject: "钥密新设备验证码",
+          text: [
+            "检测到一台新设备正在尝试进入你的钥密密码库。",
+            "",
+            `验证码：${FIXED_VERIFICATION_CODE}`,
+            "",
+            "验证码 10 分钟内有效。如果不是你本人操作，请不要向任何人提供此验证码。",
+          ].join("\n"),
+        });
+      } catch (error) {
+        await env.DB.prepare(
+          "DELETE FROM verification_challenges WHERE token_hash = ?",
+        )
+          .bind(challengeHash)
+          .run();
+        const detail =
+          error instanceof Error ? error.message : "SMTP 发送失败";
+        return Response.json(
+          { error: `验证码邮件发送失败：${detail}` },
+          { status: 502 },
+        );
+      }
+
       return Response.json({
         needsVerification: true,
         challengeToken,
         email: settings.email,
+        emailSent: true,
       });
     }
 

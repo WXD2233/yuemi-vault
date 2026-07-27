@@ -86,7 +86,7 @@ test("encrypts complete vault records while retaining demo access", async () => 
   assert.match(vaultRoute, /passwordCipher\.startsWith\(ENCRYPTED_RECORD_PREFIX\)/);
 });
 
-test("only exposes password recovery after a notification email is configured", async () => {
+test("only exposes password recovery after email and SMTP are configured", async () => {
   const [page, vaultRoute, recoveryRoute] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/vault/route.ts", import.meta.url), "utf8"),
@@ -106,7 +106,45 @@ test("only exposes password recovery after a notification email is configured", 
   assert.match(vaultRoute, /set-recovery-email/);
   assert.match(recoveryRoute, /const DEMO_CODE = "246810"/);
   assert.match(recoveryRoute, /const DEMO_MASTER_PASSWORD = "KeySafe2026!"/);
+  assert.match(recoveryRoute, /action === "request-code"/);
   assert.match(recoveryRoute, /action === "verify-code"/);
   assert.match(recoveryRoute, /action === "send-password"/);
   assert.match(recoveryRoute, /configuredEmail\.toLowerCase\(\)/);
+  assert.match(recoveryRoute, /getReadySmtpConfig/);
+  assert.doesNotMatch(recoveryRoute, /demoPassword:/);
+});
+
+test("supports encrypted QQ, 163 and Gmail SMTP settings", async () => {
+  const [page, schema, smtpConfig, smtpClient, vaultRoute, unlockRoute] =
+    await Promise.all([
+      readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+      readFile(new URL("../db/smtp-config.ts", import.meta.url), "utf8"),
+      readFile(new URL("../db/smtp.ts", import.meta.url), "utf8"),
+      readFile(new URL("../app/api/vault/route.ts", import.meta.url), "utf8"),
+      readFile(
+        new URL("../app/api/auth/unlock/route.ts", import.meta.url),
+        "utf8",
+      ),
+    ]);
+
+  assert.match(page, /SMTP 邮件服务/);
+  assert.match(page, /smtp\.qq\.com/);
+  assert.match(page, /smtp\.163\.com/);
+  assert.match(page, /smtp\.gmail\.com/);
+  assert.match(page, /发送测试邮件/);
+  assert.match(schema, /smtpSecretCipher/);
+  assert.match(schema, /smtpVerifiedAt/);
+  assert.match(smtpConfig, /SMTP_CONFIG_KEY/);
+  assert.match(smtpConfig, /AES-GCM/);
+  assert.match(smtpClient, /cloudflare:sockets/);
+  assert.match(smtpClient, /AUTH LOGIN/);
+  assert.match(smtpClient, /secureTransport: "on"/);
+  assert.match(vaultRoute, /action === "set-smtp-config"/);
+  assert.match(vaultRoute, /action === "test-smtp"/);
+  assert.match(unlockRoute, /验证码邮件发送失败/);
+  assert.doesNotMatch(
+    vaultRoute,
+    /smtpSecretCipher:\s*settings\.smtpSecretCipher/,
+  );
 });

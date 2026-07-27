@@ -52,6 +52,14 @@ type VaultPayload = {
     email: string;
     maxFailedAttempts: number;
     lockoutMinutes: number;
+    smtpProvider: string;
+    smtpHost: string;
+    smtpPort: number;
+    smtpUsername: string;
+    smtpFromName: string;
+    smtpEnabled: boolean;
+    smtpVerifiedAt: string | null;
+    hasSmtpSecret: boolean;
   };
 };
 
@@ -118,6 +126,14 @@ const defaultPayload: VaultPayload = {
     email: "w***@example.com",
     maxFailedAttempts: 5,
     lockoutMinutes: 15,
+    smtpProvider: "",
+    smtpHost: "",
+    smtpPort: 465,
+    smtpUsername: "",
+    smtpFromName: "钥密",
+    smtpEnabled: false,
+    smtpVerifiedAt: null,
+    hasSmtpSecret: false,
   },
 };
 
@@ -348,7 +364,6 @@ export default function Home() {
   const [recoveryEmail, setRecoveryEmail] = useState("");
   const [recoveryToken, setRecoveryToken] = useState("");
   const [recoveryError, setRecoveryError] = useState("");
-  const [recoveredPassword, setRecoveredPassword] = useState("");
 
   const [passwordLength, setPasswordLength] = useState(20);
   const [passwordOptions, setPasswordOptions] = useState({
@@ -742,6 +757,13 @@ export default function Home() {
       setToast("请先在登录保护中保存通知邮箱");
       return;
     }
+    if (
+      !vault.settings.twoFactorEnabled &&
+      !vault.settings.smtpEnabled
+    ) {
+      setToast("请先保存 SMTP 配置并发送测试邮件");
+      return;
+    }
     try {
       await postVault({
         action: "set-two-factor",
@@ -804,13 +826,65 @@ export default function Home() {
     }
   }
 
-  function openRecovery() {
+  async function handleSaveSmtpConfig(config: {
+    provider: string;
+    username: string;
+    secret: string;
+    fromName: string;
+  }) {
+    try {
+      await postVault({ action: "set-smtp-config", ...config });
+      await fetchVault(sessionToken, masterPassword);
+      await refreshRecoveryStatus();
+      setToast("SMTP 配置已加密保存，请发送测试邮件");
+      return true;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "SMTP 配置保存失败");
+      return false;
+    }
+  }
+
+  async function handleTestSmtp() {
+    try {
+      await postVault({ action: "test-smtp" });
+      await fetchVault(sessionToken, masterPassword);
+      await refreshRecoveryStatus();
+      setToast("测试邮件已发送，SMTP 服务已启用");
+      return true;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "测试邮件发送失败");
+      return false;
+    }
+  }
+
+  async function openRecovery() {
     setRecoveryCode("");
     setRecoveryEmail("");
     setRecoveryToken("");
     setRecoveryError("");
-    setRecoveredPassword("");
-    setRecoveryStep("code");
+    setLoading(true);
+    try {
+      const response = await fetch("/api/auth/recovery", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "request-code" }),
+      });
+      const result = (await response.json()) as {
+        error?: string;
+        sent?: boolean;
+        maskedEmail?: string;
+      };
+      if (!response.ok || !result.sent) {
+        setUnlockError(result.error ?? "找回验证码发送失败");
+        return;
+      }
+      setRecoveryMaskedEmail(result.maskedEmail ?? recoveryMaskedEmail);
+      setRecoveryStep("code");
+    } catch {
+      setUnlockError("找回验证码发送失败，请稍后重试");
+    } finally {
+      setLoading(false);
+    }
   }
 
   function closeRecovery() {
@@ -819,7 +893,6 @@ export default function Home() {
     setRecoveryEmail("");
     setRecoveryToken("");
     setRecoveryError("");
-    setRecoveredPassword("");
   }
 
   async function handleRecoveryCode(event: FormEvent) {
@@ -871,13 +944,11 @@ export default function Home() {
       const result = (await response.json()) as {
         error?: string;
         delivered?: boolean;
-        demoPassword?: string;
       };
       if (!response.ok || !result.delivered) {
         setRecoveryError(result.error ?? "通知邮箱验证失败");
         return;
       }
-      setRecoveredPassword(result.demoPassword ?? "");
       setRecoveryStep("sent");
     } catch {
       setRecoveryError("新主密码发送失败，请稍后重试");
@@ -1077,24 +1148,19 @@ export default function Home() {
                   <span className="recovery-success-mark" aria-hidden="true">
                     ✓
                   </span>
-                  <span className="recovery-step">演示发送完成</span>
+                  <span className="recovery-step">邮件发送完成</span>
                   <h2 id="recovery-title">新主密码已发送</h2>
                   <p>
-                    通知邮箱验证成功。正式邮件服务接入前，演示主密码显示如下。
+                    通知邮箱验证成功，请前往邮箱查看新的主密码。
                   </p>
-                  <div className="demo-hint recovery-password">
-                    <span>新主密码</span>
-                    <strong>{recoveredPassword}</strong>
-                  </div>
                   <button
                     className="primary-button"
                     type="button"
                     onClick={() => {
-                      setMasterPassword(recoveredPassword);
                       closeRecovery();
                     }}
                   >
-                    返回登录并填写密码
+                    返回登录
                   </button>
                 </div>
               ) : null}
@@ -1286,6 +1352,8 @@ export default function Home() {
             handleToggleTwoFactor={handleToggleTwoFactor}
             handleLockoutPolicy={handleLockoutPolicy}
             handleSaveRecoveryEmail={handleSaveRecoveryEmail}
+            handleSaveSmtpConfig={handleSaveSmtpConfig}
+            handleTestSmtp={handleTestSmtp}
             setDeleteTarget={setDeleteTarget}
           />
         )}
@@ -2019,6 +2087,8 @@ function SettingsView({
   handleToggleTwoFactor,
   handleLockoutPolicy,
   handleSaveRecoveryEmail,
+  handleSaveSmtpConfig,
+  handleTestSmtp,
   setDeleteTarget,
 }: {
   vault: VaultPayload;
@@ -2031,6 +2101,13 @@ function SettingsView({
     lockoutMinutes: number,
   ) => void;
   handleSaveRecoveryEmail: (email: string) => Promise<boolean>;
+  handleSaveSmtpConfig: (config: {
+    provider: string;
+    username: string;
+    secret: string;
+    fromName: string;
+  }) => Promise<boolean>;
+  handleTestSmtp: () => Promise<boolean>;
   setDeleteTarget: (device: TrustedDevice) => void;
 }) {
   const [notificationEmail, setNotificationEmail] = useState(
@@ -2039,6 +2116,18 @@ function SettingsView({
       : "",
   );
   const [savingEmail, setSavingEmail] = useState(false);
+  const [smtpProvider, setSmtpProvider] = useState(
+    vault.settings.smtpProvider || "qq",
+  );
+  const [smtpUsername, setSmtpUsername] = useState(
+    vault.settings.smtpUsername,
+  );
+  const [smtpSecret, setSmtpSecret] = useState("");
+  const [smtpFromName, setSmtpFromName] = useState(
+    vault.settings.smtpFromName || "钥密",
+  );
+  const [savingSmtp, setSavingSmtp] = useState(false);
+  const [testingSmtp, setTestingSmtp] = useState(false);
 
   useEffect(() => {
     setNotificationEmail(
@@ -2048,12 +2137,67 @@ function SettingsView({
     );
   }, [vault.settings.email]);
 
+  useEffect(() => {
+    setSmtpProvider(vault.settings.smtpProvider || "qq");
+    setSmtpUsername(vault.settings.smtpUsername);
+    setSmtpFromName(vault.settings.smtpFromName || "钥密");
+    setSmtpSecret("");
+  }, [
+    vault.settings.smtpProvider,
+    vault.settings.smtpUsername,
+    vault.settings.smtpFromName,
+  ]);
+
   async function saveNotificationEmail(event: FormEvent) {
     event.preventDefault();
     setSavingEmail(true);
     await handleSaveRecoveryEmail(notificationEmail);
     setSavingEmail(false);
   }
+
+  async function saveSmtpConfig(event: FormEvent) {
+    event.preventDefault();
+    setSavingSmtp(true);
+    const saved = await handleSaveSmtpConfig({
+      provider: smtpProvider,
+      username: smtpUsername.trim(),
+      secret: smtpSecret.trim(),
+      fromName: smtpFromName.trim(),
+    });
+    if (saved) setSmtpSecret("");
+    setSavingSmtp(false);
+  }
+
+  async function testSmtp() {
+    setTestingSmtp(true);
+    await handleTestSmtp();
+    setTestingSmtp(false);
+  }
+
+  const smtpPresets: Record<
+    string,
+    { label: string; host: string; port: number; secretLabel: string }
+  > = {
+    qq: {
+      label: "QQ 邮箱",
+      host: "smtp.qq.com",
+      port: 465,
+      secretLabel: "SMTP 授权码",
+    },
+    "163": {
+      label: "163 邮箱",
+      host: "smtp.163.com",
+      port: 465,
+      secretLabel: "客户端授权密码",
+    },
+    gmail: {
+      label: "Gmail",
+      host: "smtp.gmail.com",
+      port: 465,
+      secretLabel: "应用专用密码",
+    },
+  };
+  const selectedSmtpPreset = smtpPresets[smtpProvider] ?? smtpPresets.qq;
 
   return (
     <div className="settings-layout">
@@ -2123,10 +2267,17 @@ function SettingsView({
               const needsEmail =
                 !vault.settings.twoFactorEnabled &&
                 !isNotificationEmailConfigured(vault.settings.email);
+              const needsSmtp =
+                !vault.settings.twoFactorEnabled &&
+                !vault.settings.smtpEnabled;
               void handleToggleTwoFactor();
               if (needsEmail) {
                 window.requestAnimationFrame(() => {
                   document.getElementById("notification-email")?.focus();
+                });
+              } else if (needsSmtp) {
+                window.requestAnimationFrame(() => {
+                  document.getElementById("smtp-provider")?.focus();
                 });
               }
             }}
@@ -2188,6 +2339,127 @@ function SettingsView({
             保存有效邮箱后即可修改上方开关，登录页也会出现“忘记主密码”。清空并保存会同时关闭这两项保护。
           </p>
         </div>
+      </section>
+
+      <section className="panel settings-panel smtp-panel">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">邮件发送</span>
+            <h2>SMTP 邮件服务</h2>
+          </div>
+          <span
+            className={
+              vault.settings.smtpEnabled
+                ? "policy-status"
+                : "policy-status inactive"
+            }
+          >
+            {vault.settings.smtpEnabled
+              ? "✓ 已测试可用"
+              : vault.settings.hasSmtpSecret
+                ? "等待测试"
+                : "尚未配置"}
+          </span>
+        </div>
+        <p className="settings-description">
+          用于发送新设备验证码、找回验证码和新的主密码。授权码会在服务器端加密保存，不会返回浏览器。
+        </p>
+        <form className="smtp-config-form" onSubmit={saveSmtpConfig}>
+          <div className="smtp-form-grid">
+            <label>
+              邮箱服务商
+              <select
+                id="smtp-provider"
+                value={smtpProvider}
+                onChange={(event) => setSmtpProvider(event.target.value)}
+              >
+                <option value="qq">QQ 邮箱</option>
+                <option value="163">163 邮箱</option>
+                <option value="gmail">Gmail</option>
+              </select>
+            </label>
+            <label>
+              发件账号
+              <input
+                type="email"
+                autoComplete="username"
+                value={smtpUsername}
+                onChange={(event) => setSmtpUsername(event.target.value)}
+                placeholder={
+                  smtpProvider === "qq"
+                    ? "name@qq.com"
+                    : smtpProvider === "163"
+                      ? "name@163.com"
+                      : "name@gmail.com"
+                }
+              />
+            </label>
+            <label>
+              发件名称
+              <input
+                type="text"
+                value={smtpFromName}
+                onChange={(event) => setSmtpFromName(event.target.value)}
+                maxLength={40}
+                placeholder="钥密"
+              />
+            </label>
+            <label>
+              {selectedSmtpPreset.secretLabel}
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={smtpSecret}
+                onChange={(event) => setSmtpSecret(event.target.value)}
+                placeholder={
+                  vault.settings.hasSmtpSecret
+                    ? "已安全保存，留空不修改"
+                    : `输入${selectedSmtpPreset.secretLabel}`
+                }
+              />
+            </label>
+          </div>
+          <div className="smtp-endpoint" aria-label="SMTP 连接参数">
+            <span>SMTP 服务器</span>
+            <strong>{selectedSmtpPreset.host}</strong>
+            <span>端口</span>
+            <strong>{selectedSmtpPreset.port}</strong>
+            <span>加密方式</span>
+            <strong>SSL/TLS</strong>
+          </div>
+          <p className="smtp-help">
+            {smtpProvider === "gmail"
+              ? "Gmail 需要先开启两步验证，再创建应用专用密码；不要填写 Google 登录密码。"
+              : `${selectedSmtpPreset.label}需要在邮箱设置中开启 SMTP 服务并生成授权码；不要填写邮箱登录密码。`}
+          </p>
+          <div className="smtp-actions">
+            <button
+              className="secondary-button"
+              type="submit"
+              disabled={savingSmtp || testingSmtp}
+            >
+              {savingSmtp ? "保存中…" : "保存 SMTP 配置"}
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => void testSmtp()}
+              disabled={
+                testingSmtp ||
+                savingSmtp ||
+                !vault.settings.hasSmtpSecret ||
+                !isNotificationEmailConfigured(vault.settings.email)
+              }
+            >
+              {testingSmtp ? "发送中…" : "发送测试邮件"}
+            </button>
+          </div>
+          {!isNotificationEmailConfigured(vault.settings.email) ? (
+            <p className="form-error">
+              请先在上方保存通知邮箱，测试邮件会发送到该邮箱。
+            </p>
+          ) : null}
+        </form>
       </section>
 
       <section className="panel settings-panel lockout-panel">

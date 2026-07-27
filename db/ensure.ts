@@ -43,7 +43,16 @@ export async function ensureVaultSchema() {
         email TEXT NOT NULL DEFAULT 'w***@example.com',
         master_password_hash TEXT NOT NULL DEFAULT '${MASTER_PASSWORD_HASH}',
         max_failed_attempts INTEGER NOT NULL DEFAULT 5,
-        lockout_minutes INTEGER NOT NULL DEFAULT 15
+        lockout_minutes INTEGER NOT NULL DEFAULT 15,
+        smtp_provider TEXT NOT NULL DEFAULT '',
+        smtp_host TEXT NOT NULL DEFAULT '',
+        smtp_port INTEGER NOT NULL DEFAULT 465,
+        smtp_username TEXT NOT NULL DEFAULT '',
+        smtp_secret_cipher TEXT NOT NULL DEFAULT '',
+        smtp_secret_iv TEXT NOT NULL DEFAULT '',
+        smtp_from_name TEXT NOT NULL DEFAULT '钥密',
+        smtp_enabled INTEGER NOT NULL DEFAULT 0,
+        smtp_verified_at TEXT
       )
     `),
     env.DB.prepare(`
@@ -104,6 +113,51 @@ export async function ensureVaultSchema() {
   if (!existingColumns.has("lockout_minutes")) {
     await env.DB.prepare(
       "ALTER TABLE security_settings ADD COLUMN lockout_minutes INTEGER NOT NULL DEFAULT 15",
+    ).run();
+  }
+  if (!existingColumns.has("smtp_provider")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN smtp_provider TEXT NOT NULL DEFAULT ''",
+    ).run();
+  }
+  if (!existingColumns.has("smtp_host")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN smtp_host TEXT NOT NULL DEFAULT ''",
+    ).run();
+  }
+  if (!existingColumns.has("smtp_port")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN smtp_port INTEGER NOT NULL DEFAULT 465",
+    ).run();
+  }
+  if (!existingColumns.has("smtp_username")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN smtp_username TEXT NOT NULL DEFAULT ''",
+    ).run();
+  }
+  if (!existingColumns.has("smtp_secret_cipher")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN smtp_secret_cipher TEXT NOT NULL DEFAULT ''",
+    ).run();
+  }
+  if (!existingColumns.has("smtp_secret_iv")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN smtp_secret_iv TEXT NOT NULL DEFAULT ''",
+    ).run();
+  }
+  if (!existingColumns.has("smtp_from_name")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN smtp_from_name TEXT NOT NULL DEFAULT '钥密'",
+    ).run();
+  }
+  if (!existingColumns.has("smtp_enabled")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN smtp_enabled INTEGER NOT NULL DEFAULT 0",
+    ).run();
+  }
+  if (!existingColumns.has("smtp_verified_at")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN smtp_verified_at TEXT",
     ).run();
   }
 

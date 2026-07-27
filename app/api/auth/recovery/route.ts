@@ -5,6 +5,11 @@ import {
   hashSecret,
 } from "../../../../db/auth";
 import { ensureVaultSchema } from "../../../../db/ensure";
+import {
+  getReadySmtpConfig,
+  getStoredSmtpConfig,
+} from "../../../../db/smtp-config";
+import { sendSmtpMail } from "../../../../db/smtp";
 
 export const dynamic = "force-dynamic";
 
@@ -32,11 +37,19 @@ async function getNotificationEmail() {
   return settings?.email?.trim() ?? "";
 }
 
+async function getRecoveryStatus() {
+  const email = await getNotificationEmail();
+  const smtp = await getStoredSmtpConfig();
+  const configured =
+    isNotificationEmailConfigured(email) &&
+    Boolean(smtp?.enabled && smtp.secretCipher && smtp.secretIv);
+  return { email, configured };
+}
+
 export async function GET() {
   try {
     await ensureVaultSchema();
-    const email = await getNotificationEmail();
-    const configured = isNotificationEmailConfigured(email);
+    const { email, configured } = await getRecoveryStatus();
     return Response.json({
       configured,
       maskedEmail: configured ? maskEmail(email) : "",
@@ -54,13 +67,37 @@ export async function POST(request: Request) {
     await ensureVaultSchema();
     const payload = (await request.json()) as Record<string, unknown>;
     const action = String(payload.action ?? "");
-    const configuredEmail = await getNotificationEmail();
+    const { email: configuredEmail, configured } = await getRecoveryStatus();
 
-    if (!isNotificationEmailConfigured(configuredEmail)) {
+    if (!configured) {
       return Response.json(
-        { error: "尚未在设置中录入通知邮箱" },
+        { error: "请先在设置中保存通知邮箱并测试 SMTP 邮件服务" },
         { status: 409 },
       );
+    }
+
+    if (action === "request-code") {
+      const smtp = await getReadySmtpConfig();
+      await sendSmtpMail({
+        host: smtp.host,
+        port: smtp.port,
+        username: smtp.username,
+        secret: smtp.secret,
+        fromName: smtp.fromName,
+        to: configuredEmail,
+        subject: "钥密主密码找回验证码",
+        text: [
+          "你正在申请找回钥密密码管理器的主密码。",
+          "",
+          `两步验证码：${DEMO_CODE}`,
+          "",
+          "验证码 10 分钟内有效。如果不是你本人操作，请忽略此邮件。",
+        ].join("\n"),
+      });
+      return Response.json({
+        sent: true,
+        maskedEmail: maskEmail(configuredEmail),
+      });
     }
 
     if (action === "verify-code") {
@@ -126,6 +163,24 @@ export async function POST(request: Request) {
         );
       }
 
+      const smtp = await getReadySmtpConfig();
+      await sendSmtpMail({
+        host: smtp.host,
+        port: smtp.port,
+        username: smtp.username,
+        secret: smtp.secret,
+        fromName: smtp.fromName,
+        to: configuredEmail,
+        subject: "钥密新的主密码",
+        text: [
+          "你的钥密演示主密码已重新设置。",
+          "",
+          `新主密码：${DEMO_MASTER_PASSWORD}`,
+          "",
+          "请使用新主密码登录。为安全起见，请勿转发此邮件。",
+        ].join("\n"),
+      });
+
       const demoPasswordHash = await hashMasterPassword(DEMO_MASTER_PASSWORD);
       await env.DB.batch([
         env.DB.prepare(
@@ -141,7 +196,6 @@ export async function POST(request: Request) {
       return Response.json({
         delivered: true,
         maskedEmail: maskEmail(configuredEmail),
-        demoPassword: DEMO_MASTER_PASSWORD,
       });
     }
 
