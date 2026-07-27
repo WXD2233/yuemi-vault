@@ -11,6 +11,14 @@ import {
 
 export const dynamic = "force-dynamic";
 
+const ENCRYPTED_RECORD_PREFIX = "yv2.";
+const encryptedStorageFields = {
+  projectName: "加密记录",
+  account: "••••••••",
+  category: "已加密",
+  notes: "",
+};
+
 function errorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "Unexpected error";
   return Response.json({ error: message }, { status: 500 });
@@ -118,12 +126,11 @@ export async function POST(request: Request) {
 
       await db.insert(vaultEntries).values({
         id: crypto.randomUUID(),
-        projectName,
-        account,
-        category,
+        ...(passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX)
+          ? encryptedStorageFields
+          : { projectName, account, category, notes }),
         passwordCipher,
         passwordIv,
-        notes,
         securityStatus: "安全",
         updatedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
       });
@@ -152,10 +159,9 @@ export async function POST(request: Request) {
       await db
         .update(vaultEntries)
         .set({
-          projectName,
-          account,
-          category,
-          notes,
+          ...(passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX)
+            ? encryptedStorageFields
+            : { projectName, account, category, notes }),
           updatedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
           ...(passwordCipher && passwordIv
             ? { passwordCipher, passwordIv, securityStatus: "安全" }

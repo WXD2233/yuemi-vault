@@ -22,6 +22,16 @@ type VaultEntry = {
   passwordIv: string;
   notes: string;
   updatedAt: string;
+  decryptionError?: boolean;
+};
+
+type VaultSecretPayload = {
+  version: 2;
+  projectName: string;
+  account: string;
+  category: string;
+  notes: string;
+  password: string;
 };
 
 type TrustedDevice = {
@@ -45,6 +55,13 @@ type VaultPayload = {
 };
 
 const DEMO_CODE = "246810";
+const ENCRYPTED_RECORD_PREFIX = "yv2.";
+const encryptedStorageFields = {
+  projectName: "加密记录",
+  account: "••••••••",
+  category: "已加密",
+  notes: "",
+};
 
 const themeOptions: Array<{
   value: ThemePreference;
@@ -131,7 +148,7 @@ function base64ToBytes(value: string) {
   return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
 }
 
-async function encryptSecret(secret: string, masterPassword: string) {
+async function deriveVaultKey(masterPassword: string, salt: Uint8Array) {
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(masterPassword),
@@ -139,54 +156,49 @@ async function encryptSecret(secret: string, masterPassword: string) {
     false,
     ["deriveKey"],
   );
-  const key = await crypto.subtle.deriveKey(
+  return crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
       hash: "SHA-256",
-      salt: new TextEncoder().encode("yue-mi-vault-v1"),
+      salt,
       iterations: 150_000,
     },
     keyMaterial,
     { name: "AES-GCM", length: 256 },
     false,
-    ["encrypt"],
+    ["encrypt", "decrypt"],
   );
+}
+
+async function encryptVaultRecord(
+  payload: Omit<VaultSecretPayload, "version">,
+  masterPassword: string,
+) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveVaultKey(masterPassword, salt);
   const cipher = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
-    new TextEncoder().encode(secret),
+    new TextEncoder().encode(JSON.stringify({ version: 2, ...payload })),
   );
 
   return {
-    passwordCipher: bytesToBase64(new Uint8Array(cipher)),
+    passwordCipher: `${ENCRYPTED_RECORD_PREFIX}${bytesToBase64(salt)}.${bytesToBase64(
+      new Uint8Array(cipher),
+    )}`,
     passwordIv: bytesToBase64(iv),
   };
 }
 
-async function decryptSecret(
+async function decryptLegacySecret(
   passwordCipher: string,
   passwordIv: string,
   masterPassword: string,
 ) {
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(masterPassword),
-    "PBKDF2",
-    false,
-    ["deriveKey"],
-  );
-  const key = await crypto.subtle.deriveKey(
-    {
-      name: "PBKDF2",
-      hash: "SHA-256",
-      salt: new TextEncoder().encode("yue-mi-vault-v1"),
-      iterations: 150_000,
-    },
-    keyMaterial,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["decrypt"],
+  const key = await deriveVaultKey(
+    masterPassword,
+    new TextEncoder().encode("yue-mi-vault-v1"),
   );
   const plain = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: base64ToBytes(passwordIv) },
@@ -195,6 +207,83 @@ async function decryptSecret(
   );
 
   return new TextDecoder().decode(plain);
+}
+
+async function decryptVaultRecord(
+  passwordCipher: string,
+  passwordIv: string,
+  masterPassword: string,
+) {
+  if (!passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX)) {
+    throw new Error("Unsupported encrypted record format");
+  }
+
+  const [saltValue, cipherValue] = passwordCipher
+    .slice(ENCRYPTED_RECORD_PREFIX.length)
+    .split(".");
+  if (!saltValue || !cipherValue) {
+    throw new Error("Invalid encrypted record");
+  }
+
+  const key = await deriveVaultKey(masterPassword, base64ToBytes(saltValue));
+  const plain = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(passwordIv) },
+    key,
+    base64ToBytes(cipherValue),
+  );
+  const payload = JSON.parse(
+    new TextDecoder().decode(plain),
+  ) as VaultSecretPayload;
+
+  if (
+    payload.version !== 2 ||
+    !payload.projectName ||
+    !payload.account ||
+    !payload.category ||
+    typeof payload.password !== "string" ||
+    typeof payload.notes !== "string"
+  ) {
+    throw new Error("Invalid encrypted record payload");
+  }
+
+  return payload;
+}
+
+async function hydrateVaultEntries(
+  entries: VaultEntry[],
+  masterPassword: string,
+) {
+  return Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX)) {
+        return entry;
+      }
+
+      try {
+        const payload = await decryptVaultRecord(
+          entry.passwordCipher,
+          entry.passwordIv,
+          masterPassword,
+        );
+        return {
+          ...entry,
+          projectName: payload.projectName,
+          account: payload.account,
+          category: payload.category,
+          notes: payload.notes,
+        };
+      } catch {
+        return {
+          ...entry,
+          projectName: "无法解密的记录",
+          account: "—",
+          category: "已加密",
+          notes: "请锁定密码库后重新输入主密码。",
+          decryptionError: true,
+        };
+      }
+    }),
+  );
 }
 
 function makePassword(length: number, options: Record<string, boolean>) {
@@ -260,19 +349,26 @@ export default function Home() {
     notes: "",
   });
 
-  const fetchVault = useCallback(async (token: string) => {
-    try {
-      const response = await fetch("/api/vault", {
-        cache: "no-store",
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) throw new Error("vault request failed");
-      const payload = (await response.json()) as VaultPayload;
-      setVault(payload);
-    } catch {
-      setToast("暂时无法读取密码库，请稍后重试");
-    }
-  }, []);
+  const fetchVault = useCallback(
+    async (token: string, unlockPassword: string) => {
+      try {
+        const response = await fetch("/api/vault", {
+          cache: "no-store",
+          headers: { authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) throw new Error("vault request failed");
+        const payload = (await response.json()) as VaultPayload;
+        const entries = await hydrateVaultEntries(
+          payload.entries,
+          unlockPassword,
+        );
+        setVault({ ...payload, entries });
+      } catch {
+        setToast("暂时无法读取密码库，请稍后重试");
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     let localDeviceId = window.localStorage.getItem("yuemi-device-id");
@@ -436,7 +532,7 @@ export default function Home() {
       }
 
       setSessionToken(result.sessionToken);
-      await fetchVault(result.sessionToken);
+      await fetchVault(result.sessionToken, masterPassword);
       setPhase("vault");
       setToast("服务端校验通过");
     } catch {
@@ -473,7 +569,7 @@ export default function Home() {
       }
 
       setSessionToken(result.sessionToken);
-      await fetchVault(result.sessionToken);
+      await fetchVault(result.sessionToken, masterPassword);
       setPhase("vault");
       setToast("新设备验证成功");
     } catch {
@@ -491,13 +587,19 @@ export default function Home() {
     }
 
     try {
-      const encrypted = await encryptSecret(entryForm.password, masterPassword);
+      const encrypted = await encryptVaultRecord(
+        {
+          projectName: entryForm.projectName,
+          account: entryForm.account,
+          category: entryForm.category,
+          notes: entryForm.notes,
+          password: entryForm.password,
+        },
+        masterPassword,
+      );
       await postVault({
         action: "add-entry",
-        projectName: entryForm.projectName,
-        account: entryForm.account,
-        category: entryForm.category,
-        notes: entryForm.notes,
+        ...encryptedStorageFields,
         ...encrypted,
       });
       setEntryForm({
@@ -507,8 +609,8 @@ export default function Home() {
         password: "",
         notes: "",
       });
-      await fetchVault(sessionToken);
-      setToast("密码已加密保存");
+      await fetchVault(sessionToken, masterPassword);
+      setToast("记录已完整加密保存");
     } catch {
       setToast("保存失败，请稍后重试");
     }
@@ -530,19 +632,57 @@ export default function Home() {
     }
 
     try {
-      const encrypted = values.password
-        ? await encryptSecret(values.password, masterPassword)
-        : {};
+      const currentEntry = vault.entries.find((entry) => entry.id === id);
+      let nextPassword = values.password;
+
+      if (!nextPassword && currentEntry) {
+        if (
+          currentEntry.passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX)
+        ) {
+          const payload = await decryptVaultRecord(
+            currentEntry.passwordCipher,
+            currentEntry.passwordIv,
+            masterPassword,
+          );
+          nextPassword = payload.password;
+        } else if (
+          currentEntry.passwordCipher !== "encrypted-demo-value" &&
+          currentEntry.passwordIv !== "demo-iv"
+        ) {
+          nextPassword = await decryptLegacySecret(
+            currentEntry.passwordCipher,
+            currentEntry.passwordIv,
+            masterPassword,
+          );
+        }
+      }
+
+      const encrypted = nextPassword
+        ? await encryptVaultRecord(
+            {
+              projectName: values.projectName,
+              account: values.account,
+              category: values.category,
+              notes: values.notes,
+              password: nextPassword,
+            },
+            masterPassword,
+          )
+        : null;
       await postVault({
         action: "update-entry",
         id,
-        projectName: values.projectName,
-        account: values.account,
-        category: values.category,
-        notes: values.notes,
-        ...encrypted,
+        ...(encrypted
+          ? encryptedStorageFields
+          : {
+              projectName: values.projectName,
+              account: values.account,
+              category: values.category,
+              notes: values.notes,
+            }),
+        ...(encrypted ?? {}),
       });
-      await fetchVault(sessionToken);
+      await fetchVault(sessionToken, masterPassword);
       setToast("密码记录已更新");
       return true;
     } catch {
@@ -557,7 +697,7 @@ export default function Home() {
         action: "set-two-factor",
         enabled: !vault.settings.twoFactorEnabled,
       });
-      await fetchVault(sessionToken);
+      await fetchVault(sessionToken, masterPassword);
       setToast(
         vault.settings.twoFactorEnabled
           ? "新设备二次验证已关闭"
@@ -578,7 +718,7 @@ export default function Home() {
         maxFailedAttempts,
         lockoutMinutes,
       });
-      await fetchVault(sessionToken);
+      await fetchVault(sessionToken, masterPassword);
       setToast("密码错误锁定策略已更新");
     } catch {
       setToast("锁定策略更新失败");
@@ -591,7 +731,7 @@ export default function Home() {
       await postVault({ action: "delete-device", id: deleteTarget.id });
       const removedCurrentDevice = deleteTarget.id === deviceId;
       setDeleteTarget(null);
-      await fetchVault(sessionToken);
+      await fetchVault(sessionToken, masterPassword);
       if (removedCurrentDevice) {
         const nextDeviceId = crypto.randomUUID();
         window.localStorage.setItem("yuemi-device-id", nextDeviceId);
@@ -1063,11 +1203,25 @@ function VaultView({
         return;
       }
 
-      const password = await decryptSecret(
-        entry.passwordCipher,
-        entry.passwordIv,
-        masterPassword,
-      );
+      if (entry.decryptionError) {
+        throw new Error("Record decryption failed");
+      }
+
+      const password = entry.passwordCipher.startsWith(
+        ENCRYPTED_RECORD_PREFIX,
+      )
+        ? (
+            await decryptVaultRecord(
+              entry.passwordCipher,
+              entry.passwordIv,
+              masterPassword,
+            )
+          ).password
+        : await decryptLegacySecret(
+            entry.passwordCipher,
+            entry.passwordIv,
+            masterPassword,
+          );
       setRevealedSecret({ entry, password, error: "" });
     } catch {
       setRevealedSecret({
@@ -1256,7 +1410,7 @@ function VaultView({
           </div>
           <div className="table-footer">
             <span>共 {vault.entries.length} 条记录</span>
-            <span>密码仅以加密密文保存</span>
+            <span>项目、账号、分类、备注和密码均以密文保存</span>
           </div>
         </section>
       </div>
@@ -1530,7 +1684,7 @@ function VaultView({
                   placeholder="留空则保持原密码不变"
                 />
                 <span className="optional-field-note">
-                  只有填写新密码时才会重新加密并替换原密码。
+                  不填写新密码时会保留原密码，其他内容仍会重新加密保存。
                 </span>
               </label>
               <label>

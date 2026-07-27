@@ -69,3 +69,19 @@ test("supports persistent color themes and system matching", async () => {
     /grid-template-columns: minmax\(0, 1fr\) minmax\(320px, 340px\)/,
   );
 });
+
+test("encrypts complete vault records while retaining demo access", async () => {
+  const [page, vaultRoute] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/vault/route.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /const DEMO_CODE = "246810"/);
+  assert.match(page, /KeySafe2026!/);
+  assert.match(page, /ENCRYPTED_RECORD_PREFIX = "yv2\."/);
+  assert.match(page, /encryptVaultRecord/);
+  assert.match(page, /decryptVaultRecord/);
+  assert.match(page, /crypto\.getRandomValues\(new Uint8Array\(16\)\)/);
+  assert.match(vaultRoute, /encryptedStorageFields/);
+  assert.match(vaultRoute, /passwordCipher\.startsWith\(ENCRYPTED_RECORD_PREFIX\)/);
+});
