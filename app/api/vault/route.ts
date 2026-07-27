@@ -19,6 +19,13 @@ const encryptedStorageFields = {
   notes: "",
 };
 
+function isNotificationEmailConfigured(email: string) {
+  return (
+    !email.includes("*") &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+  );
+}
+
 function errorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "Unexpected error";
   return Response.json({ error: message }, { status: 500 });
@@ -172,9 +179,42 @@ export async function POST(request: Request) {
     }
 
     if (action === "set-two-factor") {
+      const enabled = Boolean(payload.enabled);
+      if (enabled) {
+        const settings = await db
+          .select({ email: securitySettings.email })
+          .from(securitySettings)
+          .where(eq(securitySettings.id, 1))
+          .limit(1);
+        if (!isNotificationEmailConfigured(settings[0]?.email ?? "")) {
+          return Response.json(
+            { error: "请先保存有效的通知邮箱" },
+            { status: 400 },
+          );
+        }
+      }
       await db
         .update(securitySettings)
-        .set({ twoFactorEnabled: Boolean(payload.enabled) })
+        .set({ twoFactorEnabled: enabled })
+        .where(eq(securitySettings.id, 1));
+      return Response.json({ ok: true });
+    }
+
+    if (action === "set-recovery-email") {
+      const email = String(payload.email ?? "").trim().toLowerCase();
+      if (email && !isNotificationEmailConfigured(email)) {
+        return Response.json(
+          { error: "通知邮箱格式不正确" },
+          { status: 400 },
+        );
+      }
+
+      await db
+        .update(securitySettings)
+        .set({
+          email,
+          ...(email ? {} : { twoFactorEnabled: false }),
+        })
         .where(eq(securitySettings.id, 1));
       return Response.json({ ok: true });
     }

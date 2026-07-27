@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 
 type Phase = "locked" | "verify" | "vault";
 type AppView = "vault" | "records" | "settings";
+type RecoveryStep = "closed" | "code" | "email" | "sent";
 type ThemePreference =
   | "dark"
   | "light"
@@ -135,6 +136,13 @@ const recommendedCategories = [
   "金融",
   "社交",
 ];
+
+function isNotificationEmailConfigured(email: string) {
+  return (
+    !email.includes("*") &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+  );
+}
 
 function bytesToBase64(bytes: Uint8Array) {
   let binary = "";
@@ -332,6 +340,15 @@ export default function Home() {
   const [deleteTarget, setDeleteTarget] = useState<TrustedDevice | null>(null);
   const [theme, setTheme] = useState<ThemePreference>("system");
   const [themeLoaded, setThemeLoaded] = useState(false);
+  const [recoveryAvailable, setRecoveryAvailable] = useState(false);
+  const [recoveryMaskedEmail, setRecoveryMaskedEmail] = useState("");
+  const [recoveryStep, setRecoveryStep] =
+    useState<RecoveryStep>("closed");
+  const [recoveryCode, setRecoveryCode] = useState("");
+  const [recoveryEmail, setRecoveryEmail] = useState("");
+  const [recoveryToken, setRecoveryToken] = useState("");
+  const [recoveryError, setRecoveryError] = useState("");
+  const [recoveredPassword, setRecoveredPassword] = useState("");
 
   const [passwordLength, setPasswordLength] = useState(20);
   const [passwordOptions, setPasswordOptions] = useState({
@@ -370,6 +387,24 @@ export default function Home() {
     [],
   );
 
+  const refreshRecoveryStatus = useCallback(async () => {
+    try {
+      const response = await fetch("/api/auth/recovery", {
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("recovery status failed");
+      const result = (await response.json()) as {
+        configured?: boolean;
+        maskedEmail?: string;
+      };
+      setRecoveryAvailable(Boolean(result.configured));
+      setRecoveryMaskedEmail(result.maskedEmail ?? "");
+    } catch {
+      setRecoveryAvailable(false);
+      setRecoveryMaskedEmail("");
+    }
+  }, []);
+
   useEffect(() => {
     let localDeviceId = window.localStorage.getItem("yuemi-device-id");
     if (!localDeviceId) {
@@ -386,6 +421,10 @@ export default function Home() {
       }),
     );
   }, []);
+
+  useEffect(() => {
+    void refreshRecoveryStatus();
+  }, [refreshRecoveryStatus]);
 
   useEffect(() => {
     const savedTheme = window.localStorage.getItem("yuemi-theme");
@@ -692,6 +731,13 @@ export default function Home() {
   }
 
   async function handleToggleTwoFactor() {
+    if (
+      !vault.settings.twoFactorEnabled &&
+      !isNotificationEmailConfigured(vault.settings.email)
+    ) {
+      setToast("请先在主密码找回中保存通知邮箱");
+      return;
+    }
     try {
       await postVault({
         action: "set-two-factor",
@@ -722,6 +768,117 @@ export default function Home() {
       setToast("密码错误锁定策略已更新");
     } catch {
       setToast("锁定策略更新失败");
+    }
+  }
+
+  async function handleSaveRecoveryEmail(email: string) {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (
+      normalizedEmail &&
+      !isNotificationEmailConfigured(normalizedEmail)
+    ) {
+      setToast("请输入有效的通知邮箱");
+      return false;
+    }
+
+    try {
+      await postVault({
+        action: "set-recovery-email",
+        email: normalizedEmail,
+      });
+      await fetchVault(sessionToken, masterPassword);
+      await refreshRecoveryStatus();
+      setToast(
+        normalizedEmail
+          ? "通知邮箱已保存，登录页找回入口已开启"
+          : "通知邮箱已移除，登录页找回入口已关闭",
+      );
+      return true;
+    } catch {
+      setToast("通知邮箱保存失败");
+      return false;
+    }
+  }
+
+  function openRecovery() {
+    setRecoveryCode("");
+    setRecoveryEmail("");
+    setRecoveryToken("");
+    setRecoveryError("");
+    setRecoveredPassword("");
+    setRecoveryStep("code");
+  }
+
+  function closeRecovery() {
+    setRecoveryStep("closed");
+    setRecoveryCode("");
+    setRecoveryEmail("");
+    setRecoveryToken("");
+    setRecoveryError("");
+    setRecoveredPassword("");
+  }
+
+  async function handleRecoveryCode(event: FormEvent) {
+    event.preventDefault();
+    setRecoveryError("");
+    setLoading(true);
+    try {
+      const response = await fetch("/api/auth/recovery", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "verify-code",
+          code: recoveryCode,
+        }),
+      });
+      const result = (await response.json()) as {
+        error?: string;
+        recoveryToken?: string;
+        maskedEmail?: string;
+      };
+      if (!response.ok || !result.recoveryToken) {
+        setRecoveryError(result.error ?? "两步验证失败");
+        return;
+      }
+      setRecoveryToken(result.recoveryToken);
+      setRecoveryMaskedEmail(result.maskedEmail ?? recoveryMaskedEmail);
+      setRecoveryStep("email");
+    } catch {
+      setRecoveryError("暂时无法连接验证服务，请稍后重试");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRecoveryEmail(event: FormEvent) {
+    event.preventDefault();
+    setRecoveryError("");
+    setLoading(true);
+    try {
+      const response = await fetch("/api/auth/recovery", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "send-password",
+          email: recoveryEmail.trim(),
+          recoveryToken,
+        }),
+      });
+      const result = (await response.json()) as {
+        error?: string;
+        delivered?: boolean;
+        demoPassword?: string;
+      };
+      if (!response.ok || !result.delivered) {
+        setRecoveryError(result.error ?? "通知邮箱验证失败");
+        return;
+      }
+      setRecoveredPassword(result.demoPassword ?? "");
+      setRecoveryStep("sent");
+    } catch {
+      setRecoveryError("新主密码发送失败，请稍后重试");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -801,9 +958,15 @@ export default function Home() {
                   : "解锁并进入"}
             </button>
           </form>
-          <button className="text-button" type="button">
-            忘记主密码？
-          </button>
+          {recoveryAvailable ? (
+            <button
+              className="text-button"
+              type="button"
+              onClick={openRecovery}
+            >
+              忘记主密码？
+            </button>
+          ) : null}
           <div className="demo-hint">
             <span>演示主密码</span>
             <strong>KeySafe2026!</strong>
@@ -816,6 +979,124 @@ export default function Home() {
             </div>
           </div>
         </section>
+        {recoveryStep !== "closed" ? (
+          <div className="modal-backdrop" role="presentation">
+            <section
+              className="confirm-modal recovery-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="recovery-title"
+            >
+              <button
+                className="modal-close recovery-close"
+                type="button"
+                aria-label="关闭找回主密码"
+                onClick={closeRecovery}
+              >
+                ×
+              </button>
+              {recoveryStep === "code" ? (
+                <>
+                  <span className="recovery-step">步骤 1 / 2 · 两步验证</span>
+                  <h2 id="recovery-title">验证安全验证码</h2>
+                  <p>验证码正确后，才能核对设置中保存的通知邮箱。</p>
+                  <form className="auth-form" onSubmit={handleRecoveryCode}>
+                    <label htmlFor="recovery-code">两步验证码</label>
+                    <input
+                      id="recovery-code"
+                      className="code-input"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={recoveryCode}
+                      onChange={(event) =>
+                        setRecoveryCode(event.target.value.replace(/\D/g, ""))
+                      }
+                      placeholder="••••••"
+                      autoFocus
+                    />
+                    {recoveryError ? (
+                      <p className="form-error">{recoveryError}</p>
+                    ) : null}
+                    <button
+                      className="primary-button"
+                      type="submit"
+                      disabled={loading || recoveryCode.length !== 6}
+                    >
+                      {loading ? "验证中…" : "验证并继续"}
+                    </button>
+                  </form>
+                  <div className="demo-hint recovery-demo-hint">
+                    <span>演示验证码</span>
+                    <strong>{DEMO_CODE}</strong>
+                  </div>
+                </>
+              ) : null}
+              {recoveryStep === "email" ? (
+                <>
+                  <span className="recovery-step">步骤 2 / 2 · 邮箱确认</span>
+                  <h2 id="recovery-title">输入通知邮箱</h2>
+                  <p>
+                    请输入设置中保存的完整邮箱
+                    {recoveryMaskedEmail
+                      ? `（${recoveryMaskedEmail}）`
+                      : ""}
+                    ，一致后才会发送新主密码。
+                  </p>
+                  <form className="auth-form" onSubmit={handleRecoveryEmail}>
+                    <label htmlFor="recovery-email">通知邮箱</label>
+                    <input
+                      id="recovery-email"
+                      type="email"
+                      autoComplete="email"
+                      value={recoveryEmail}
+                      onChange={(event) =>
+                        setRecoveryEmail(event.target.value)
+                      }
+                      placeholder="输入设置中的通知邮箱"
+                      autoFocus
+                    />
+                    {recoveryError ? (
+                      <p className="form-error">{recoveryError}</p>
+                    ) : null}
+                    <button
+                      className="primary-button"
+                      type="submit"
+                      disabled={loading || !recoveryEmail.trim()}
+                    >
+                      {loading ? "发送中…" : "发送新的主密码"}
+                    </button>
+                  </form>
+                </>
+              ) : null}
+              {recoveryStep === "sent" ? (
+                <div className="recovery-success">
+                  <span className="recovery-success-mark" aria-hidden="true">
+                    ✓
+                  </span>
+                  <span className="recovery-step">演示发送完成</span>
+                  <h2 id="recovery-title">新主密码已发送</h2>
+                  <p>
+                    通知邮箱验证成功。正式邮件服务接入前，演示主密码显示如下。
+                  </p>
+                  <div className="demo-hint recovery-password">
+                    <span>新主密码</span>
+                    <strong>{recoveredPassword}</strong>
+                  </div>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={() => {
+                      setMasterPassword(recoveredPassword);
+                      closeRecovery();
+                    }}
+                  >
+                    返回登录并填写密码
+                  </button>
+                </div>
+              ) : null}
+            </section>
+          </div>
+        ) : null}
       </main>
     );
   }
@@ -1000,6 +1281,7 @@ export default function Home() {
             setTheme={setTheme}
             handleToggleTwoFactor={handleToggleTwoFactor}
             handleLockoutPolicy={handleLockoutPolicy}
+            handleSaveRecoveryEmail={handleSaveRecoveryEmail}
             setDeleteTarget={setDeleteTarget}
           />
         )}
@@ -1732,6 +2014,7 @@ function SettingsView({
   setTheme,
   handleToggleTwoFactor,
   handleLockoutPolicy,
+  handleSaveRecoveryEmail,
   setDeleteTarget,
 }: {
   vault: VaultPayload;
@@ -1743,8 +2026,31 @@ function SettingsView({
     maxFailedAttempts: number,
     lockoutMinutes: number,
   ) => void;
+  handleSaveRecoveryEmail: (email: string) => Promise<boolean>;
   setDeleteTarget: (device: TrustedDevice) => void;
 }) {
+  const [notificationEmail, setNotificationEmail] = useState(
+    isNotificationEmailConfigured(vault.settings.email)
+      ? vault.settings.email
+      : "",
+  );
+  const [savingEmail, setSavingEmail] = useState(false);
+
+  useEffect(() => {
+    setNotificationEmail(
+      isNotificationEmailConfigured(vault.settings.email)
+        ? vault.settings.email
+        : "",
+    );
+  }, [vault.settings.email]);
+
+  async function saveNotificationEmail(event: FormEvent) {
+    event.preventDefault();
+    setSavingEmail(true);
+    await handleSaveRecoveryEmail(notificationEmail);
+    setSavingEmail(false);
+  }
+
   return (
     <div className="settings-layout">
       <section className="panel settings-panel theme-panel">
@@ -1820,15 +2126,75 @@ function SettingsView({
         </p>
         <div className="verified-row">
           <div>
-            <span>验证邮箱</span>
-            <strong>{vault.settings.email}</strong>
+            <span>通知邮箱</span>
+            <strong>
+              {isNotificationEmailConfigured(vault.settings.email)
+                ? vault.settings.email
+                : "尚未录入"}
+            </strong>
           </div>
-          <em>✓ 已验证</em>
+          <em>
+            {isNotificationEmailConfigured(vault.settings.email)
+              ? "✓ 已设置"
+              : "等待设置"}
+          </em>
         </div>
         <div className="security-callout">
           <ShieldMark small />
           <p>
             建议保持开启。即使主密码泄露，新设备仍无法直接读取你的密码库。
+          </p>
+        </div>
+      </section>
+
+      <section className="panel settings-panel recovery-settings-panel">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">主密码找回</span>
+            <h2>通知邮箱</h2>
+          </div>
+          <span
+            className={
+              isNotificationEmailConfigured(vault.settings.email)
+                ? "policy-status"
+                : "policy-status inactive"
+            }
+          >
+            {isNotificationEmailConfigured(vault.settings.email)
+              ? "登录页入口已开启"
+              : "找回入口未开启"}
+          </span>
+        </div>
+        <p className="settings-description">
+          录入有效通知邮箱后，登录页才会出现“忘记主密码”。找回时必须先通过两步验证码，再输入这里保存的完整邮箱。
+        </p>
+        <form
+          className="recovery-email-form"
+          onSubmit={saveNotificationEmail}
+        >
+          <label htmlFor="notification-email">通知邮箱</label>
+          <div>
+            <input
+              id="notification-email"
+              type="email"
+              autoComplete="email"
+              value={notificationEmail}
+              onChange={(event) => setNotificationEmail(event.target.value)}
+              placeholder="例如：name@example.com"
+            />
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={savingEmail}
+            >
+              {savingEmail ? "保存中…" : "保存邮箱"}
+            </button>
+          </div>
+        </form>
+        <div className="security-callout">
+          <ShieldMark small />
+          <p>
+            清空邮箱并保存即可关闭找回入口。通知邮箱仅用于新设备验证和主密码找回。
           </p>
         </div>
       </section>

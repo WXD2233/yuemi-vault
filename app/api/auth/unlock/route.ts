@@ -17,6 +17,13 @@ type SecurityRow = {
   lockoutMinutes: number;
 };
 
+function isNotificationEmailConfigured(email: string) {
+  return (
+    !email.includes("*") &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+  );
+}
+
 export async function POST(request: Request) {
   try {
     await ensureVaultSchema();
@@ -125,7 +132,11 @@ export async function POST(request: Request) {
       .bind(deviceId)
       .first<{ id: string }>();
 
-    if (settings.twoFactorEnabled && !trustedDevice) {
+    if (
+      settings.twoFactorEnabled &&
+      isNotificationEmailConfigured(settings.email) &&
+      !trustedDevice
+    ) {
       const challengeToken = createOpaqueToken();
       const challengeHash = await hashSecret(challengeToken);
       const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();

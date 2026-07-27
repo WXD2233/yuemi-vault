@@ -117,6 +117,10 @@ export async function ensureVaultSchema() {
     )
     .run();
 
+  await env.DB.prepare(
+    "UPDATE security_settings SET two_factor_enabled = 0 WHERE email = '' OR email LIKE '%*%'",
+  ).run();
+
   const entryCount = await env.DB.prepare(
     "SELECT COUNT(*) AS total FROM vault_entries",
   ).first<{ total: number }>();

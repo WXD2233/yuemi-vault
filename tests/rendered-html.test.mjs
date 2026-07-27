@@ -85,3 +85,25 @@ test("encrypts complete vault records while retaining demo access", async () => 
   assert.match(vaultRoute, /encryptedStorageFields/);
   assert.match(vaultRoute, /passwordCipher\.startsWith\(ENCRYPTED_RECORD_PREFIX\)/);
 });
+
+test("only exposes password recovery after a notification email is configured", async () => {
+  const [page, vaultRoute, recoveryRoute] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/vault/route.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../app/api/auth/recovery/route.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.match(page, /recoveryAvailable/);
+  assert.match(page, /recoveryStep === "code"/);
+  assert.match(page, /recoveryStep === "email"/);
+  assert.match(page, /action: "set-recovery-email"/);
+  assert.match(vaultRoute, /set-recovery-email/);
+  assert.match(recoveryRoute, /const DEMO_CODE = "246810"/);
+  assert.match(recoveryRoute, /const DEMO_MASTER_PASSWORD = "KeySafe2026!"/);
+  assert.match(recoveryRoute, /action === "verify-code"/);
+  assert.match(recoveryRoute, /action === "send-password"/);
+  assert.match(recoveryRoute, /configuredEmail\.toLowerCase\(\)/);
+});
