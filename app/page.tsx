@@ -818,6 +818,7 @@ export default function Home() {
   const [view, setView] = useState<AppView>("vault");
   const [vault, setVault] = useState<VaultPayload>(defaultPayload);
   const [masterPassword, setMasterPassword] = useState("");
+  const [showMasterPassword, setShowMasterPassword] = useState(false);
   const [unlockError, setUnlockError] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
   const [verificationError, setVerificationError] = useState("");
@@ -1285,6 +1286,7 @@ export default function Home() {
       setVault(defaultPayload);
       setView("vault");
       setPhase("locked");
+      setShowMasterPassword(false);
       setRequiresInitialPasswordChange(false);
       setToast("主密码已修改，请使用新主密码重新登录");
       return { ok: true };
@@ -1583,13 +1585,28 @@ export default function Home() {
               <input
                 id="master-password"
                 data-testid="master-password"
-                type="password"
+                type={showMasterPassword ? "text" : "password"}
                 autoComplete="current-password"
                 value={masterPassword}
                 onChange={(event) => setMasterPassword(event.target.value)}
                 placeholder="输入主密码"
               />
-              <span aria-hidden="true">◉</span>
+              <button
+                className={`password-visibility-button${
+                  showMasterPassword ? " is-visible" : ""
+                }`}
+                type="button"
+                aria-label={
+                  showMasterPassword ? "隐藏主密码" : "显示主密码"
+                }
+                aria-pressed={showMasterPassword}
+                title={showMasterPassword ? "隐藏主密码" : "显示主密码"}
+                onClick={() =>
+                  setShowMasterPassword((current) => !current)
+                }
+              >
+                <span className="password-eye" aria-hidden="true" />
+              </button>
             </div>
             {unlockError ? <p className="form-error">{unlockError}</p> : null}
             <button

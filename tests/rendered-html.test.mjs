@@ -15,6 +15,10 @@ test("builds the 钥密 unlock experience", async () => {
   assert.match(page, /首次登录默认密码/);
   assert.match(page, /12345678/);
   assert.match(page, /requiresInitialPasswordChange \?/);
+  assert.match(page, /type=\{showMasterPassword \? "text" : "password"\}/);
+  assert.match(page, /aria-label=\{/);
+  assert.match(page, /显示主密码/);
+  assert.match(page, /隐藏主密码/);
   assert.doesNotMatch(
     `${page}\n${layout}`,
     /codex-preview|SkeletonPreview|react-loading-skeleton/,

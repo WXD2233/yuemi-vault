@@ -322,15 +322,87 @@ textarea:focus-visible {
 
 .input-with-icon input {
   width: 100%;
-  padding-right: 50px;
+  padding-right: 64px;
 }
 
-.input-with-icon span {
+.password-visibility-button {
   position: absolute;
-  right: 18px;
+  right: 8px;
   top: 50%;
   transform: translateY(-50%);
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
   color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.password-visibility-button:hover,
+.password-visibility-button.is-visible {
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+.password-visibility-button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--green-soft);
+}
+
+.password-eye {
+  position: relative;
+  display: block;
+  width: 23px;
+  height: 15px;
+  border: 2px solid currentColor;
+  border-radius: 50% / 62%;
+}
+
+.password-eye::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  content: "";
+  background: currentColor;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.password-visibility-button:not(.is-visible) .password-eye::before {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 50%;
+  width: 29px;
+  height: 2px;
+  content: "";
+  background: currentColor;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px var(--panel-strong);
+  transform: translate(-50%, -50%) rotate(-42deg);
+}
+
+.password-visibility-button:active {
+  transform: translateY(-50%) scale(0.96);
+}
+
+.password-visibility-button .password-eye {
+  color: var(--muted);
+}
+
+.password-visibility-button:hover .password-eye,
+.password-visibility-button.is-visible .password-eye {
+  color: currentColor;
 }
 
 input,
