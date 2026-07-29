@@ -833,6 +833,8 @@ export default function Home() {
   const [themeLoaded, setThemeLoaded] = useState(false);
   const [recoveryAvailable, setRecoveryAvailable] = useState(false);
   const [recoveryMaskedEmail, setRecoveryMaskedEmail] = useState("");
+  const [requiresInitialPasswordChange, setRequiresInitialPasswordChange] =
+    useState(false);
   const [recoveryStep, setRecoveryStep] =
     useState<RecoveryStep>("closed");
   const [recoveryCode, setRecoveryCode] = useState("");
@@ -891,12 +893,17 @@ export default function Home() {
       const result = (await response.json()) as {
         configured?: boolean;
         maskedEmail?: string;
+        requiresPasswordChange?: boolean;
       };
       setRecoveryAvailable(Boolean(result.configured));
       setRecoveryMaskedEmail(result.maskedEmail ?? "");
+      setRequiresInitialPasswordChange(
+        Boolean(result.requiresPasswordChange),
+      );
     } catch {
       setRecoveryAvailable(false);
       setRecoveryMaskedEmail("");
+      setRequiresInitialPasswordChange(false);
     }
   }, []);
 
@@ -1278,6 +1285,7 @@ export default function Home() {
       setVault(defaultPayload);
       setView("vault");
       setPhase("locked");
+      setRequiresInitialPasswordChange(false);
       setToast("主密码已修改，请使用新主密码重新登录");
       return { ok: true };
     } catch (error) {
@@ -1513,6 +1521,7 @@ export default function Home() {
         setRecoveryError(result.error ?? "通知邮箱验证失败");
         return;
       }
+      setRequiresInitialPasswordChange(true);
       setRecoveryStep("sent");
     } catch {
       setRecoveryError("新主密码发送失败，请稍后重试");
@@ -1606,10 +1615,12 @@ export default function Home() {
               忘记主密码？
             </button>
           ) : null}
-          <div className="demo-hint">
-            <span>首次登录默认密码（登录后必须修改）</span>
-            <strong>12345678</strong>
-          </div>
+          {requiresInitialPasswordChange ? (
+            <div className="demo-hint">
+              <span>首次登录默认密码（登录后必须修改）</span>
+              <strong>12345678</strong>
+            </div>
+          ) : null}
           <div className="security-note">
             <ShieldMark small />
             <div>

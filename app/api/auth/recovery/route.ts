@@ -10,7 +10,11 @@ import {
   getStoredSmtpConfig,
 } from "../../../../db/smtp-config";
 import { sendSmtpMail } from "../../../../db/smtp";
-import { DEFAULT_MASTER_PASSWORD } from "../../../../db/security-constants";
+import {
+  DEFAULT_MASTER_PASSWORD,
+  DEFAULT_MASTER_PASSWORD_HASH,
+  LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
+} from "../../../../db/security-constants";
 
 export const dynamic = "force-dynamic";
 
@@ -30,38 +34,53 @@ function maskEmail(email: string) {
   return `${visible}${"•".repeat(Math.max(3, local.length - visible.length))}@${domain}`;
 }
 
-async function getNotificationEmail() {
+async function getLoginSettings() {
   const settings = await env.DB.prepare(
-    "SELECT email FROM security_settings WHERE id = 1",
-  ).first<{ email: string }>();
-  return settings?.email?.trim() ?? "";
+    `SELECT
+      email,
+      master_password_hash AS masterPasswordHash
+     FROM security_settings
+     WHERE id = 1`,
+  ).first<{ email: string; masterPasswordHash: string }>();
+  return {
+    email: settings?.email?.trim() ?? "",
+    requiresPasswordChange:
+      settings?.masterPasswordHash === DEFAULT_MASTER_PASSWORD_HASH ||
+      settings?.masterPasswordHash === LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
+  };
 }
 
 async function getRecoveryStatus() {
-  const email = await getNotificationEmail();
+  const loginSettings = await getLoginSettings();
   const smtp = await getStoredSmtpConfig();
   const configured =
-    isNotificationEmailConfigured(email) &&
+    isNotificationEmailConfigured(loginSettings.email) &&
     Boolean(
       smtp?.featureEnabled &&
         smtp.enabled &&
         smtp.secretCipher &&
         smtp.secretIv,
     );
-  return { email, configured };
+  return { ...loginSettings, configured };
 }
 
 export async function GET() {
   try {
     await ensureVaultSchema();
-    const { email, configured } = await getRecoveryStatus();
+    const { email, configured, requiresPasswordChange } =
+      await getRecoveryStatus();
     return Response.json({
       configured,
       maskedEmail: configured ? maskEmail(email) : "",
+      requiresPasswordChange,
     });
   } catch {
     return Response.json(
-      { configured: false, maskedEmail: "" },
+      {
+        configured: false,
+        maskedEmail: "",
+        requiresPasswordChange: false,
+      },
       { status: 503 },
     );
   }

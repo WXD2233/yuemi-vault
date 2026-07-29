@@ -14,6 +14,7 @@ test("builds the 钥密 unlock experience", async () => {
   assert.match(page, /请输入主密码进入你的加密密码库/);
   assert.match(page, /首次登录默认密码/);
   assert.match(page, /12345678/);
+  assert.match(page, /requiresInitialPasswordChange \?/);
   assert.doesNotMatch(
     `${page}\n${layout}`,
     /codex-preview|SkeletonPreview|react-loading-skeleton/,
@@ -245,6 +246,8 @@ test("forces the first login to replace the default password", async () => {
   assert.match(constants, /DEFAULT_MASTER_PASSWORD = "12345678"/);
   assert.match(ensure, /DEFAULT_MASTER_PASSWORD_HASH/);
   assert.match(page, /requiresPasswordChange/);
+  assert.match(page, /setRequiresInitialPasswordChange/);
+  assert.match(page, /requiresInitialPasswordChange \?/);
   assert.match(page, /ForcedPasswordChangeView/);
   assert.match(page, /请先修改默认主密码/);
   assert.match(page, /默认密码仅用于第一次进入/);
