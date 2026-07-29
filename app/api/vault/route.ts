@@ -169,11 +169,23 @@ export async function POST(request: Request) {
         .from(securitySettings)
         .where(eq(securitySettings.id, 1))
         .limit(1);
-      if (
+      const requiresPasswordChange =
         settings[0]?.masterPasswordHash === DEFAULT_MASTER_PASSWORD_HASH ||
         settings[0]?.masterPasswordHash ===
-          LEGACY_DEFAULT_MASTER_PASSWORD_HASH
-      ) {
+          LEGACY_DEFAULT_MASTER_PASSWORD_HASH;
+
+      if (action === "abandon-first-login") {
+        if (requiresPasswordChange) {
+          await env.DB.prepare(
+            "DELETE FROM vault_sessions WHERE token_hash = ?",
+          )
+            .bind(authorization.session.tokenHash)
+            .run();
+        }
+        return Response.json({ ok: true, sessionRevoked: true });
+      }
+
+      if (requiresPasswordChange) {
         return Response.json(
           { error: "首次进入必须先修改默认主密码" },
           { status: 428 },

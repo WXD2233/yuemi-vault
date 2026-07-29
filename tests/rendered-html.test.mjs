@@ -259,7 +259,12 @@ test("forces the first login to replace the default password", async () => {
   assert.match(vaultRoute, /首次进入必须先修改默认主密码/);
   assert.match(vaultRoute, /status: 428/);
   assert.match(vaultRoute, /usesLegacyDefaultEncryption/);
+  assert.match(vaultRoute, /action === "abandon-first-login"/);
+  assert.match(vaultRoute, /sessionRevoked: true/);
   assert.match(unlockRoute, /acceptedLegacyDefault/);
+  assert.match(page, /window\.addEventListener\("pagehide"/);
+  assert.match(page, /window\.addEventListener\("pageshow"/);
+  assert.match(page, /keepalive: true/);
   assert.match(styles, /\.forced-password-layout/);
   assert.match(styles, /\.nav-item:disabled/);
 });

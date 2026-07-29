@@ -983,6 +983,51 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [lockedUntil]);
 
+  useEffect(() => {
+    if (
+      phase !== "vault" ||
+      !vault.settings.requiresPasswordChange ||
+      !sessionToken
+    ) {
+      return;
+    }
+
+    const abandonFirstLogin = () => {
+      void fetch("/api/vault", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({ action: "abandon-first-login" }),
+        keepalive: true,
+      }).catch(() => undefined);
+    };
+
+    const resetRestoredFirstLogin = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      setMasterPassword("");
+      setShowMasterPassword(false);
+      setSessionToken("");
+      setVault(defaultPayload);
+      setView("vault");
+      setPhase("locked");
+      void refreshRecoveryStatus();
+    };
+
+    window.addEventListener("pagehide", abandonFirstLogin);
+    window.addEventListener("pageshow", resetRestoredFirstLogin);
+    return () => {
+      window.removeEventListener("pagehide", abandonFirstLogin);
+      window.removeEventListener("pageshow", resetRestoredFirstLogin);
+    };
+  }, [
+    phase,
+    refreshRecoveryStatus,
+    sessionToken,
+    vault.settings.requiresPasswordChange,
+  ]);
+
   const regenerate = useCallback(() => {
     setGeneratedPassword(makePassword(passwordLength, passwordOptions));
   }, [passwordLength, passwordOptions]);
