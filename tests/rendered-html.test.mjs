@@ -114,7 +114,7 @@ test("only exposes password recovery after email and SMTP are configured", async
   assert.doesNotMatch(recoveryRoute, /demoPassword:/);
 });
 
-test("supports encrypted QQ, 163 and Gmail SMTP settings", async () => {
+test("supports encrypted custom SMTP settings with optional presets", async () => {
   const [page, schema, smtpConfig, smtpClient, vaultRoute, unlockRoute] =
     await Promise.all([
       readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -132,16 +132,33 @@ test("supports encrypted QQ, 163 and Gmail SMTP settings", async () => {
   assert.match(page, /smtp\.qq\.com/);
   assert.match(page, /smtp\.163\.com/);
   assert.match(page, /smtp\.gmail\.com/);
+  assert.match(page, /支持任意公网 SMTP 邮箱服务/);
+  assert.match(page, /smtpFeatureEnabled/);
+  assert.match(page, /list="smtp-provider-options"/);
+  assert.match(page, /value="starttls"/);
   assert.match(page, /发送测试邮件/);
   assert.match(schema, /smtpSecretCipher/);
   assert.match(schema, /smtpVerifiedAt/);
+  assert.match(schema, /smtpFeatureEnabled/);
+  assert.match(schema, /smtpSecurity/);
   assert.match(smtpConfig, /SMTP_CONFIG_KEY/);
   assert.match(smtpConfig, /AES-GCM/);
+  assert.match(smtpConfig, /normalizeSmtpHost/);
+  assert.doesNotMatch(smtpConfig, /endsWith\("@qq\.com"\)/);
+  assert.doesNotMatch(smtpConfig, /endsWith\("@163\.com"\)/);
   assert.match(smtpClient, /cloudflare:sockets/);
   assert.match(smtpClient, /AUTH LOGIN/);
-  assert.match(smtpClient, /secureTransport: "on"/);
+  assert.match(smtpClient, /AUTH PLAIN/);
+  assert.match(
+    smtpClient,
+    /secureTransport: input\.security === "tls" \? "on" : "starttls"/,
+  );
+  assert.match(smtpClient, /STARTTLS/);
+  assert.match(smtpClient, /\.startTls\(\)/);
   assert.match(vaultRoute, /action === "set-smtp-config"/);
+  assert.match(vaultRoute, /action === "set-smtp-feature"/);
   assert.match(vaultRoute, /action === "test-smtp"/);
+  assert.match(vaultRoute, /normalizeSmtpHost\(payload\.host\)/);
   assert.match(unlockRoute, /验证码邮件发送失败/);
   assert.doesNotMatch(
     vaultRoute,

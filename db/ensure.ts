@@ -47,11 +47,13 @@ export async function ensureVaultSchema() {
         smtp_provider TEXT NOT NULL DEFAULT '',
         smtp_host TEXT NOT NULL DEFAULT '',
         smtp_port INTEGER NOT NULL DEFAULT 465,
+        smtp_security TEXT NOT NULL DEFAULT 'tls',
         smtp_username TEXT NOT NULL DEFAULT '',
         smtp_secret_cipher TEXT NOT NULL DEFAULT '',
         smtp_secret_iv TEXT NOT NULL DEFAULT '',
         smtp_from_name TEXT NOT NULL DEFAULT '钥密',
         smtp_enabled INTEGER NOT NULL DEFAULT 0,
+        smtp_feature_enabled INTEGER NOT NULL DEFAULT 0,
         smtp_verified_at TEXT
       )
     `),
@@ -130,6 +132,11 @@ export async function ensureVaultSchema() {
       "ALTER TABLE security_settings ADD COLUMN smtp_port INTEGER NOT NULL DEFAULT 465",
     ).run();
   }
+  if (!existingColumns.has("smtp_security")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN smtp_security TEXT NOT NULL DEFAULT 'tls'",
+    ).run();
+  }
   if (!existingColumns.has("smtp_username")) {
     await env.DB.prepare(
       "ALTER TABLE security_settings ADD COLUMN smtp_username TEXT NOT NULL DEFAULT ''",
@@ -153,6 +160,11 @@ export async function ensureVaultSchema() {
   if (!existingColumns.has("smtp_enabled")) {
     await env.DB.prepare(
       "ALTER TABLE security_settings ADD COLUMN smtp_enabled INTEGER NOT NULL DEFAULT 0",
+    ).run();
+  }
+  if (!existingColumns.has("smtp_feature_enabled")) {
+    await env.DB.prepare(
+      "ALTER TABLE security_settings ADD COLUMN smtp_feature_enabled INTEGER NOT NULL DEFAULT 0",
     ).run();
   }
   if (!existingColumns.has("smtp_verified_at")) {

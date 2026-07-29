@@ -1528,10 +1528,20 @@ textarea {
   gap: 15px;
 }
 
+.smtp-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .smtp-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.smtp-secret-field {
+  grid-column: 1 / -1;
 }
 
 .smtp-config-form label {
@@ -2381,6 +2391,15 @@ textarea {
   .smtp-form-grid,
   .smtp-actions {
     grid-template-columns: 1fr;
+  }
+
+  .smtp-header-actions {
+    align-items: flex-end;
+    flex-direction: column-reverse;
+  }
+
+  .smtp-secret-field {
+    grid-column: auto;
   }
 
   .smtp-endpoint {

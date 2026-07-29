@@ -38,11 +38,15 @@ export const securitySettings = sqliteTable("security_settings", {
   smtpProvider: text("smtp_provider").notNull().default(""),
   smtpHost: text("smtp_host").notNull().default(""),
   smtpPort: integer("smtp_port").notNull().default(465),
+  smtpSecurity: text("smtp_security").notNull().default("tls"),
   smtpUsername: text("smtp_username").notNull().default(""),
   smtpSecretCipher: text("smtp_secret_cipher").notNull().default(""),
   smtpSecretIv: text("smtp_secret_iv").notNull().default(""),
   smtpFromName: text("smtp_from_name").notNull().default("钥密"),
   smtpEnabled: integer("smtp_enabled", { mode: "boolean" })
+    .notNull()
+    .default(false),
+  smtpFeatureEnabled: integer("smtp_feature_enabled", { mode: "boolean" })
     .notNull()
     .default(false),
   smtpVerifiedAt: text("smtp_verified_at"),

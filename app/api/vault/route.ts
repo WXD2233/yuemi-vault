@@ -7,8 +7,10 @@ import {
   decryptSmtpSecret,
   encryptSmtpSecret,
   getStoredSmtpConfig,
+  normalizeSmtpHost,
   normalizeSmtpProvider,
-  SMTP_PRESETS,
+  normalizeSmtpSecurity,
+  validateSmtpPort,
   validateSmtpUsername,
 } from "../../../db/smtp-config";
 import { sendSmtpMail } from "../../../db/smtp";
@@ -100,9 +102,11 @@ export async function GET(request: Request) {
             smtpProvider: settings.smtpProvider,
             smtpHost: settings.smtpHost,
             smtpPort: settings.smtpPort,
+            smtpSecurity: settings.smtpSecurity,
             smtpUsername: settings.smtpUsername,
             smtpFromName: settings.smtpFromName,
             smtpEnabled: settings.smtpEnabled,
+            smtpFeatureEnabled: settings.smtpFeatureEnabled,
             smtpVerifiedAt: settings.smtpVerifiedAt,
             hasSmtpSecret: Boolean(
               settings.smtpSecretCipher && settings.smtpSecretIv,
@@ -116,9 +120,11 @@ export async function GET(request: Request) {
             smtpProvider: "",
             smtpHost: "",
             smtpPort: 465,
+            smtpSecurity: "tls",
             smtpUsername: "",
             smtpFromName: "钥密",
             smtpEnabled: false,
+            smtpFeatureEnabled: false,
             smtpVerifiedAt: null,
             hasSmtpSecret: false,
           },
@@ -212,6 +218,7 @@ export async function POST(request: Request) {
           .select({
             email: securitySettings.email,
             smtpEnabled: securitySettings.smtpEnabled,
+            smtpFeatureEnabled: securitySettings.smtpFeatureEnabled,
             smtpSecretCipher: securitySettings.smtpSecretCipher,
             smtpSecretIv: securitySettings.smtpSecretIv,
           })
@@ -226,6 +233,7 @@ export async function POST(request: Request) {
         }
         if (
           !settings[0]?.smtpEnabled ||
+          !settings[0]?.smtpFeatureEnabled ||
           !settings[0]?.smtpSecretCipher ||
           !settings[0]?.smtpSecretIv
         ) {
@@ -242,8 +250,23 @@ export async function POST(request: Request) {
       return Response.json({ ok: true });
     }
 
+    if (action === "set-smtp-feature") {
+      const enabled = Boolean(payload.enabled);
+      await db
+        .update(securitySettings)
+        .set({
+          smtpFeatureEnabled: enabled,
+          ...(enabled ? {} : { twoFactorEnabled: false }),
+        })
+        .where(eq(securitySettings.id, 1));
+      return Response.json({ ok: true, enabled });
+    }
+
     if (action === "set-smtp-config") {
       const provider = normalizeSmtpProvider(payload.provider);
+      const host = normalizeSmtpHost(payload.host);
+      const port = validateSmtpPort(payload.port);
+      const security = normalizeSmtpSecurity(payload.security);
       const username = String(payload.username ?? "").trim().toLowerCase();
       const secret = String(payload.secret ?? "").trim();
       const fromName =
@@ -254,13 +277,43 @@ export async function POST(request: Request) {
 
       if (!provider) {
         return Response.json(
-          { error: "请选择 QQ、163 或 Gmail SMTP" },
+          { error: "请填写邮箱服务商名称" },
           { status: 400 },
         );
       }
-      const usernameError = validateSmtpUsername(provider, username);
+      if (!host) {
+        return Response.json(
+          { error: "请输入有效的公网 SMTP 服务器域名" },
+          { status: 400 },
+        );
+      }
+      if (!port) {
+        return Response.json(
+          { error: "SMTP 端口必须为 1–65535，且不能使用端口 25" },
+          { status: 400 },
+        );
+      }
+      if (!security) {
+        return Response.json(
+          { error: "请选择 SSL/TLS 或 STARTTLS" },
+          { status: 400 },
+        );
+      }
+      const usernameError = validateSmtpUsername(username);
       if (usernameError) {
         return Response.json({ error: usernameError }, { status: 400 });
+      }
+
+      const feature = await db
+        .select({ enabled: securitySettings.smtpFeatureEnabled })
+        .from(securitySettings)
+        .where(eq(securitySettings.id, 1))
+        .limit(1);
+      if (!feature[0]?.enabled) {
+        return Response.json(
+          { error: "请先开启 SMTP 邮件服务" },
+          { status: 400 },
+        );
       }
 
       const current = await getStoredSmtpConfig();
@@ -268,10 +321,13 @@ export async function POST(request: Request) {
         !secret &&
         (!current?.secretCipher ||
           current.provider !== provider ||
+          current.host !== host ||
+          current.port !== port ||
+          current.security !== security ||
           current.username !== username)
       ) {
         return Response.json(
-          { error: `请输入${SMTP_PRESETS[provider].credentialLabel}` },
+          { error: "请输入 SMTP 授权码或应用专用密码" },
           { status: 400 },
         );
       }
@@ -283,13 +339,13 @@ export async function POST(request: Request) {
       }
 
       const encrypted = secret ? await encryptSmtpSecret(secret) : null;
-      const preset = SMTP_PRESETS[provider];
       await db
         .update(securitySettings)
         .set({
           smtpProvider: provider,
-          smtpHost: preset.host,
-          smtpPort: preset.port,
+          smtpHost: host,
+          smtpPort: port,
+          smtpSecurity: security,
           smtpUsername: username,
           smtpFromName: fromName,
           smtpEnabled: false,
@@ -307,8 +363,9 @@ export async function POST(request: Request) {
       return Response.json({
         ok: true,
         provider,
-        host: preset.host,
-        port: preset.port,
+        host,
+        port,
+        security,
       });
     }
 
@@ -327,7 +384,12 @@ export async function POST(request: Request) {
       }
 
       const smtp = await getStoredSmtpConfig();
-      if (!smtp || !smtp.secretCipher || !smtp.secretIv) {
+      if (
+        !smtp ||
+        !smtp.featureEnabled ||
+        !smtp.secretCipher ||
+        !smtp.secretIv
+      ) {
         return Response.json(
           { error: "请先保存完整的 SMTP 配置" },
           { status: 400 },
@@ -342,13 +404,17 @@ export async function POST(request: Request) {
         port: smtp.port,
         username: smtp.username,
         secret,
+        security: smtp.security,
         fromName: smtp.fromName,
         to: notificationEmail,
         subject: "钥密 SMTP 测试成功",
         text: [
           "这是一封来自钥密密码管理器的测试邮件。",
           "",
-          `服务商：${SMTP_PRESETS[smtp.provider].label}`,
+          `服务商：${smtp.provider}`,
+          `服务器：${smtp.host}:${smtp.port}（${
+            smtp.security === "tls" ? "SSL/TLS" : "STARTTLS"
+          }）`,
           `发件账号：${smtp.username}`,
           "",
           "收到此邮件表示新设备验证码和主密码找回邮件可以正常发送。",

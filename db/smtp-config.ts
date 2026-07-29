@@ -1,52 +1,32 @@
 import { env } from "cloudflare:workers";
 
-export type SmtpProvider = "qq" | "163" | "gmail";
-
-export const SMTP_PRESETS: Record<
-  SmtpProvider,
-  { label: string; host: string; port: number; credentialLabel: string }
-> = {
-  qq: {
-    label: "QQ 邮箱",
-    host: "smtp.qq.com",
-    port: 465,
-    credentialLabel: "SMTP 授权码",
-  },
-  "163": {
-    label: "163 邮箱",
-    host: "smtp.163.com",
-    port: 465,
-    credentialLabel: "客户端授权密码",
-  },
-  gmail: {
-    label: "Gmail",
-    host: "smtp.gmail.com",
-    port: 465,
-    credentialLabel: "应用专用密码",
-  },
-};
+export type SmtpSecurity = "tls" | "starttls";
 
 type StoredSmtpRow = {
   smtpProvider: string;
   smtpHost: string;
   smtpPort: number;
+  smtpSecurity: string;
   smtpUsername: string;
   smtpSecretCipher: string;
   smtpSecretIv: string;
   smtpFromName: string;
   smtpEnabled: number;
+  smtpFeatureEnabled: number;
   smtpVerifiedAt: string | null;
 };
 
 export type StoredSmtpConfig = {
-  provider: SmtpProvider;
+  provider: string;
   host: string;
   port: number;
+  security: SmtpSecurity;
   username: string;
   secretCipher: string;
   secretIv: string;
   fromName: string;
   enabled: boolean;
+  featureEnabled: boolean;
   verifiedAt: string | null;
 };
 
@@ -106,28 +86,69 @@ export async function decryptSmtpSecret(cipher: string, iv: string) {
   return new TextDecoder().decode(plain);
 }
 
-export function normalizeSmtpProvider(value: unknown): SmtpProvider | null {
-  const provider = String(value ?? "");
-  return provider === "qq" || provider === "163" || provider === "gmail"
-    ? provider
-    : null;
+export function normalizeSmtpProvider(value: unknown) {
+  const provider = String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim()
+    .slice(0, 50);
+  const presetNames: Record<string, string> = {
+    qq: "QQ 邮箱",
+    "qq 邮箱": "QQ 邮箱",
+    "163": "163 邮箱",
+    "163 邮箱": "163 邮箱",
+    gmail: "Gmail",
+  };
+  return presetNames[provider.toLowerCase()] ?? provider;
 }
 
-export function validateSmtpUsername(
-  provider: SmtpProvider,
-  username: string,
-) {
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)) {
-    return "请输入完整的发件邮箱地址";
+export function normalizeSmtpSecurity(
+  value: unknown,
+): SmtpSecurity | null {
+  const security = String(value ?? "").toLowerCase();
+  return security === "tls" || security === "starttls" ? security : null;
+}
+
+export function normalizeSmtpHost(value: unknown) {
+  const host = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\.$/, "");
+  if (
+    host.length < 4 ||
+    host.length > 253 ||
+    !host.includes(".") ||
+    !/^[a-z0-9.-]+$/.test(host) ||
+    host.includes("..") ||
+    host.startsWith(".") ||
+    host.endsWith(".") ||
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal") ||
+    /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)
+  ) {
+    return null;
   }
-  const lower = username.toLowerCase();
-  if (provider === "qq" && !lower.endsWith("@qq.com")) {
-    return "QQ SMTP 发件账号需要使用 @qq.com 邮箱";
+  const validLabels = host.split(".").every(
+    (label) =>
+      label.length <= 63 &&
+      /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label),
+  );
+  return validLabels ? host : null;
+}
+
+export function validateSmtpPort(value: unknown) {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || port === 25) {
+    return null;
   }
-  if (provider === "163" && !lower.endsWith("@163.com")) {
-    return "163 SMTP 发件账号需要使用 @163.com 邮箱";
-  }
-  return "";
+  return port;
+}
+
+export function validateSmtpUsername(username: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)
+    ? ""
+    : "请输入完整的发件邮箱地址";
 }
 
 export async function getStoredSmtpConfig(): Promise<StoredSmtpConfig | null> {
@@ -136,44 +157,52 @@ export async function getStoredSmtpConfig(): Promise<StoredSmtpConfig | null> {
       smtp_provider AS smtpProvider,
       smtp_host AS smtpHost,
       smtp_port AS smtpPort,
+      smtp_security AS smtpSecurity,
       smtp_username AS smtpUsername,
       smtp_secret_cipher AS smtpSecretCipher,
       smtp_secret_iv AS smtpSecretIv,
       smtp_from_name AS smtpFromName,
       smtp_enabled AS smtpEnabled,
+      smtp_feature_enabled AS smtpFeatureEnabled,
       smtp_verified_at AS smtpVerifiedAt
     FROM security_settings
     WHERE id = 1`,
   ).first<StoredSmtpRow>();
 
-  const provider = normalizeSmtpProvider(row?.smtpProvider);
-  if (!row || !provider) return null;
-  const preset = SMTP_PRESETS[provider];
-  if (
-    row.smtpHost !== preset.host ||
-    Number(row.smtpPort) !== preset.port ||
-    !row.smtpUsername
-  ) {
+  if (!row) return null;
+  const provider = normalizeSmtpProvider(row.smtpProvider);
+  const host = normalizeSmtpHost(row.smtpHost);
+  const port = validateSmtpPort(row.smtpPort);
+  const security = normalizeSmtpSecurity(row.smtpSecurity);
+  if (!provider || !host || !port || !security || !row.smtpUsername) {
     return null;
   }
 
   return {
     provider,
-    host: preset.host,
-    port: preset.port,
+    host,
+    port,
+    security,
     username: row.smtpUsername,
     secretCipher: row.smtpSecretCipher,
     secretIv: row.smtpSecretIv,
     fromName: row.smtpFromName || "钥密",
     enabled: Boolean(row.smtpEnabled),
+    featureEnabled: Boolean(row.smtpFeatureEnabled),
     verifiedAt: row.smtpVerifiedAt,
   };
 }
 
 export async function getReadySmtpConfig() {
   const config = await getStoredSmtpConfig();
-  if (!config || !config.enabled || !config.secretCipher || !config.secretIv) {
-    throw new Error("请先在设置中保存并测试 SMTP 邮件服务");
+  if (
+    !config ||
+    !config.featureEnabled ||
+    !config.enabled ||
+    !config.secretCipher ||
+    !config.secretIv
+  ) {
+    throw new Error("请先启用、保存并测试 SMTP 邮件服务");
   }
   return {
     ...config,

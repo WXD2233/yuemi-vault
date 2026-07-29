@@ -36,6 +36,13 @@
       "when": 1785159550897,
       "tag": "0004_small_sunfire",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785329797937,
+      "tag": "0005_fixed_rogue",
+      "breakpoints": true
     }
   ]
 }

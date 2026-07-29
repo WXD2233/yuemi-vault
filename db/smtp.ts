@@ -46,6 +46,16 @@ class SmtpConnection {
     }
   }
 
+  async startTls() {
+    this.reader.releaseLock();
+    this.writer.releaseLock();
+    this.socket = this.socket.startTls();
+    await withSmtpTimeout(this.socket.opened);
+    this.reader = this.socket.readable.getReader();
+    this.writer = this.socket.writable.getWriter();
+    this.buffer = "";
+  }
+
   private async readLine() {
     while (!this.buffer.includes("\r\n")) {
       const result = await withSmtpTimeout(this.reader.read());
@@ -121,6 +131,7 @@ export async function sendSmtpMail(input: {
   port: number;
   username: string;
   secret: string;
+  security: "tls" | "starttls";
   fromName: string;
   to: string;
   subject: string;
@@ -128,13 +139,21 @@ export async function sendSmtpMail(input: {
 }) {
   assertEmail(input.username);
   assertEmail(input.to);
-  if (input.port !== 465) {
-    throw new Error("当前仅允许使用 SMTP SSL/TLS 端口 465");
+  if (
+    !Number.isInteger(input.port) ||
+    input.port < 1 ||
+    input.port > 65535 ||
+    input.port === 25
+  ) {
+    throw new Error("SMTP 端口无效；当前环境不支持端口 25");
   }
 
   const socket = connect(
     { hostname: input.host, port: input.port },
-    { secureTransport: "on", allowHalfOpen: false },
+    {
+      secureTransport: input.security === "tls" ? "on" : "starttls",
+      allowHalfOpen: false,
+    },
   );
   const smtp = new SmtpConnection(socket);
 
@@ -145,10 +164,27 @@ export async function sendSmtpMail(input: {
       throw new Error(`SMTP 服务器拒绝连接（${greeting.code}）`);
     }
 
-    await smtp.command("EHLO yuemi-vault.local", [250]);
-    await smtp.command("AUTH LOGIN", [334]);
-    await smtp.command(utf8ToBase64(input.username), [334]);
-    await smtp.command(utf8ToBase64(input.secret), [235]);
+    let ehlo = await smtp.command("EHLO yuemi-vault.local", [250]);
+    if (input.security === "starttls") {
+      await smtp.command("STARTTLS", [220]);
+      await smtp.startTls();
+      ehlo = await smtp.command("EHLO yuemi-vault.local", [250]);
+    }
+    const capabilities = ehlo.lines.join(" ").toUpperCase();
+    if (/\bAUTH\b[^\r\n]*\bLOGIN\b/.test(capabilities)) {
+      await smtp.command("AUTH LOGIN", [334]);
+      await smtp.command(utf8ToBase64(input.username), [334]);
+      await smtp.command(utf8ToBase64(input.secret), [235]);
+    } else if (/\bAUTH\b[^\r\n]*\bPLAIN\b/.test(capabilities)) {
+      await smtp.command(
+        `AUTH PLAIN ${utf8ToBase64(
+          `\u0000${input.username}\u0000${input.secret}`,
+        )}`,
+        [235],
+      );
+    } else {
+      throw new Error("SMTP 服务器不支持 AUTH LOGIN 或 AUTH PLAIN");
+    }
     await smtp.command(`MAIL FROM:<${input.username}>`, [250]);
     await smtp.command(`RCPT TO:<${input.to}>`, [250, 251]);
     await smtp.command("DATA", [354]);

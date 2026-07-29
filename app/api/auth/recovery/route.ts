@@ -42,7 +42,12 @@ async function getRecoveryStatus() {
   const smtp = await getStoredSmtpConfig();
   const configured =
     isNotificationEmailConfigured(email) &&
-    Boolean(smtp?.enabled && smtp.secretCipher && smtp.secretIv);
+    Boolean(
+      smtp?.featureEnabled &&
+        smtp.enabled &&
+        smtp.secretCipher &&
+        smtp.secretIv,
+    );
   return { email, configured };
 }
 
@@ -83,6 +88,7 @@ export async function POST(request: Request) {
         port: smtp.port,
         username: smtp.username,
         secret: smtp.secret,
+        security: smtp.security,
         fromName: smtp.fromName,
         to: configuredEmail,
         subject: "钥密主密码找回验证码",
@@ -169,6 +175,7 @@ export async function POST(request: Request) {
         port: smtp.port,
         username: smtp.username,
         secret: smtp.secret,
+        security: smtp.security,
         fromName: smtp.fromName,
         to: configuredEmail,
         subject: "钥密新的主密码",

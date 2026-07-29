@@ -18,6 +18,7 @@ type SecurityRow = {
   maxFailedAttempts: number;
   lockoutMinutes: number;
   smtpEnabled: number;
+  smtpFeatureEnabled: number;
 };
 
 const FIXED_VERIFICATION_CODE = "246810";
@@ -53,7 +54,8 @@ export async function POST(request: Request) {
         master_password_hash AS masterPasswordHash,
         max_failed_attempts AS maxFailedAttempts,
         lockout_minutes AS lockoutMinutes,
-        smtp_enabled AS smtpEnabled
+        smtp_enabled AS smtpEnabled,
+        smtp_feature_enabled AS smtpFeatureEnabled
       FROM security_settings
       WHERE id = 1`,
     ).first<SecurityRow>();
@@ -140,6 +142,7 @@ export async function POST(request: Request) {
 
     if (
       settings.twoFactorEnabled &&
+      settings.smtpFeatureEnabled &&
       isNotificationEmailConfigured(settings.email) &&
       !trustedDevice
     ) {
@@ -166,6 +169,7 @@ export async function POST(request: Request) {
           port: smtp.port,
           username: smtp.username,
           secret: smtp.secret,
+          security: smtp.security,
           fromName: smtp.fromName,
           to: settings.email,
           subject: "钥密新设备验证码",
