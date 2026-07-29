@@ -1848,7 +1848,6 @@ export default function Home() {
             entryForm={entryForm}
             setEntryForm={setEntryForm}
             handleAddEntry={handleAddEntry}
-            handleImportEncryptedEntries={handleImportEncryptedEntries}
             handleUpdateEntry={handleUpdateEntry}
           />
         ) : (
@@ -1857,6 +1856,8 @@ export default function Home() {
             deviceId={deviceId}
             theme={theme}
             setTheme={setTheme}
+            masterPassword={masterPassword}
+            handleImportEncryptedEntries={handleImportEncryptedEntries}
             handleChangeMasterPassword={handleChangeMasterPassword}
             handleToggleTwoFactor={handleToggleTwoFactor}
             handleLockoutPolicy={handleLockoutPolicy}
@@ -1951,9 +1952,6 @@ type VaultViewProps = {
     }>
   >;
   handleAddEntry: (event: FormEvent) => void;
-  handleImportEncryptedEntries: (
-    entries: ImportableEncryptedEntry[],
-  ) => Promise<number>;
   handleUpdateEntry: (
     id: string,
     values: {
@@ -2033,7 +2031,6 @@ function VaultView({
   entryForm,
   setEntryForm,
   handleAddEntry,
-  handleImportEncryptedEntries,
   handleUpdateEntry,
 }: VaultViewProps) {
   const [revealedSecret, setRevealedSecret] = useState<{
@@ -2053,95 +2050,6 @@ function VaultView({
     password: "",
     notes: "",
   });
-  const [transferBusy, setTransferBusy] = useState(false);
-  const [transferStatus, setTransferStatus] = useState("");
-
-  async function exportEncryptedBackup() {
-    if (transferBusy) return;
-    setTransferBusy(true);
-    setTransferStatus("正在创建加密备份…");
-    try {
-      const { backup, skipped } = await createEncryptedBackup(
-        vault.entries,
-        masterPassword,
-      );
-      const date = new Date().toISOString().slice(0, 10);
-      downloadEncryptedBackup(backup, `yuemi-vault-${date}.yuemi`);
-      setTransferStatus(
-        `已导出 ${backup.recordCount} 条加密记录${
-          skipped ? `，跳过 ${skipped} 条内置演示或旧格式记录` : ""
-        }`,
-      );
-    } catch (error) {
-      setTransferStatus(
-        error instanceof Error ? error.message : "加密备份导出失败",
-      );
-    } finally {
-      setTransferBusy(false);
-    }
-  }
-
-  async function importBrowserPasswords(
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file || transferBusy) return;
-    if (file.size > 5 * 1024 * 1024) {
-      setTransferStatus("CSV 文件不能超过 5 MB");
-      return;
-    }
-
-    setTransferBusy(true);
-    setTransferStatus("正在本地解析并加密浏览器密码…");
-    try {
-      const records = parseBrowserPasswordCsv(await file.text());
-      const encrypted = await encryptVaultRecordsBatch(
-        records,
-        masterPassword,
-      );
-      const imported = await handleImportEncryptedEntries(encrypted);
-      setTransferStatus(
-        `已从 Chrome / Edge 安全导入 ${imported} 条记录；原 CSV 请及时删除`,
-      );
-    } catch (error) {
-      setTransferStatus(
-        error instanceof Error ? error.message : "浏览器密码导入失败",
-      );
-    } finally {
-      setTransferBusy(false);
-    }
-  }
-
-  async function importEncryptedBackup(
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file || transferBusy) return;
-    if (file.size > 20 * 1024 * 1024) {
-      setTransferStatus("加密备份文件不能超过 20 MB");
-      return;
-    }
-
-    setTransferBusy(true);
-    setTransferStatus("正在本地验证并解密备份…");
-    try {
-      const records = await decryptEncryptedBackup(
-        await file.text(),
-        masterPassword,
-      );
-      const imported = await handleImportEncryptedEntries(records);
-      setTransferStatus(`已从加密备份恢复 ${imported} 条密码记录`);
-    } catch (error) {
-      setTransferStatus(
-        error instanceof Error ? error.message : "加密备份导入失败",
-      );
-    } finally {
-      setTransferBusy(false);
-    }
-  }
-
   async function revealPassword(entry: VaultEntry) {
     setRevealingId(entry.id);
     setPasswordCopied(false);
@@ -2297,86 +2205,6 @@ function VaultView({
             <strong>强</strong>
           </div>
         </section>
-
-        {recordsOnly ? (
-          <section
-            className="panel transfer-panel"
-            aria-labelledby="vault-transfer-title"
-          >
-            <div className="section-heading transfer-heading">
-              <div>
-                <span className="eyebrow">导入与备份</span>
-                <h2 id="vault-transfer-title">迁移密码本</h2>
-              </div>
-              <span className="policy-status">本地加密处理</span>
-            </div>
-            <p className="settings-description">
-              支持 Chrome、Edge 导出的 CSV，以及钥密专用加密备份。浏览器
-              CSV 会先在当前设备加密，再上传密文。
-            </p>
-            <div className="transfer-actions">
-              <label
-                className={
-                  transferBusy
-                    ? "transfer-button disabled"
-                    : "transfer-button"
-                }
-              >
-                <span aria-hidden="true">⇩</span>
-                导入 Chrome / Edge
-                <input
-                  type="file"
-                  accept=".csv,text/csv"
-                  disabled={transferBusy}
-                  onChange={importBrowserPasswords}
-                />
-              </label>
-              <label
-                className={
-                  transferBusy
-                    ? "transfer-button disabled"
-                    : "transfer-button"
-                }
-              >
-                <span aria-hidden="true">↺</span>
-                导入加密备份
-                <input
-                  type="file"
-                  accept=".yuemi,application/json"
-                  disabled={transferBusy}
-                  onChange={importEncryptedBackup}
-                />
-              </label>
-              <button
-                className="transfer-button primary"
-                type="button"
-                disabled={transferBusy}
-                onClick={() => void exportEncryptedBackup()}
-              >
-                <span aria-hidden="true">⇧</span>
-                导出加密备份
-              </button>
-            </div>
-            <div className="transfer-security-note">
-              <ShieldMark small />
-              <p>
-                备份文件使用主密码通过 PBKDF2 和 AES-GCM
-                加密，恢复时必须输入同一个主密码。Chrome / Edge
-                导出的原始 CSV 是明文文件，导入后请及时删除。
-              </p>
-            </div>
-            {transferStatus ? (
-              <p
-                className="transfer-status"
-                role="status"
-                aria-live="polite"
-              >
-                {transferBusy ? <i aria-hidden="true" /> : <span>✓</span>}
-                {transferStatus}
-              </p>
-            ) : null}
-          </section>
-        ) : null}
 
         <section className="panel entries-panel" id="password-records">
           <div className="section-heading entries-heading">
@@ -2766,6 +2594,8 @@ function SettingsView({
   deviceId,
   theme,
   setTheme,
+  masterPassword,
+  handleImportEncryptedEntries,
   handleChangeMasterPassword,
   handleToggleTwoFactor,
   handleLockoutPolicy,
@@ -2779,6 +2609,10 @@ function SettingsView({
   deviceId: string;
   theme: ThemePreference;
   setTheme: (theme: ThemePreference) => void;
+  masterPassword: string;
+  handleImportEncryptedEntries: (
+    entries: ImportableEncryptedEntry[],
+  ) => Promise<number>;
   handleChangeMasterPassword: (
     currentPassword: string,
     newPassword: string,
@@ -2834,6 +2668,8 @@ function SettingsView({
   });
   const [changingPassword, setChangingPassword] = useState(false);
   const [passwordChangeError, setPasswordChangeError] = useState("");
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferStatus, setTransferStatus] = useState("");
 
   useEffect(() => {
     setNotificationEmail(
@@ -2889,6 +2725,92 @@ function SettingsView({
     setTestingSmtp(true);
     await handleTestSmtp();
     setTestingSmtp(false);
+  }
+
+  async function exportEncryptedBackup() {
+    if (transferBusy) return;
+    setTransferBusy(true);
+    setTransferStatus("正在创建加密备份…");
+    try {
+      const { backup, skipped } = await createEncryptedBackup(
+        vault.entries,
+        masterPassword,
+      );
+      const date = new Date().toISOString().slice(0, 10);
+      downloadEncryptedBackup(backup, `yuemi-vault-${date}.yuemi`);
+      setTransferStatus(
+        `已导出 ${backup.recordCount} 条加密记录${
+          skipped ? `，跳过 ${skipped} 条内置演示或旧格式记录` : ""
+        }`,
+      );
+    } catch (error) {
+      setTransferStatus(
+        error instanceof Error ? error.message : "加密备份导出失败",
+      );
+    } finally {
+      setTransferBusy(false);
+    }
+  }
+
+  async function importBrowserPasswords(
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || transferBusy) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setTransferStatus("CSV 文件不能超过 5 MB");
+      return;
+    }
+
+    setTransferBusy(true);
+    setTransferStatus("正在本地解析并加密浏览器密码…");
+    try {
+      const records = parseBrowserPasswordCsv(await file.text());
+      const encrypted = await encryptVaultRecordsBatch(
+        records,
+        masterPassword,
+      );
+      const imported = await handleImportEncryptedEntries(encrypted);
+      setTransferStatus(
+        `已从 Chrome / Edge 安全导入 ${imported} 条记录；原 CSV 请及时删除`,
+      );
+    } catch (error) {
+      setTransferStatus(
+        error instanceof Error ? error.message : "浏览器密码导入失败",
+      );
+    } finally {
+      setTransferBusy(false);
+    }
+  }
+
+  async function importEncryptedBackup(
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || transferBusy) return;
+    if (file.size > 20 * 1024 * 1024) {
+      setTransferStatus("加密备份文件不能超过 20 MB");
+      return;
+    }
+
+    setTransferBusy(true);
+    setTransferStatus("正在本地验证并解密备份…");
+    try {
+      const records = await decryptEncryptedBackup(
+        await file.text(),
+        masterPassword,
+      );
+      const imported = await handleImportEncryptedEntries(records);
+      setTransferStatus(`已从加密备份恢复 ${imported} 条密码记录`);
+    } catch (error) {
+      setTransferStatus(
+        error instanceof Error ? error.message : "加密备份导入失败",
+      );
+    } finally {
+      setTransferBusy(false);
+    }
   }
 
   async function changeMasterPassword(event: FormEvent) {
@@ -2993,6 +2915,76 @@ function SettingsView({
             </button>
           ))}
         </div>
+      </section>
+
+      <section
+        className="panel transfer-panel"
+        aria-labelledby="vault-transfer-title"
+      >
+        <div className="section-heading transfer-heading">
+          <div>
+            <span className="eyebrow">导入与备份</span>
+            <h2 id="vault-transfer-title">迁移密码本</h2>
+          </div>
+          <span className="policy-status">本地加密处理</span>
+        </div>
+        <p className="settings-description">
+          支持 Chrome、Edge 导出的 CSV，以及钥密专用加密备份。浏览器
+          CSV 会先在当前设备加密，再上传密文。
+        </p>
+        <div className="transfer-actions">
+          <label
+            className={
+              transferBusy ? "transfer-button disabled" : "transfer-button"
+            }
+          >
+            <span aria-hidden="true">⇩</span>
+            导入 Chrome / Edge
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              disabled={transferBusy}
+              onChange={importBrowserPasswords}
+            />
+          </label>
+          <label
+            className={
+              transferBusy ? "transfer-button disabled" : "transfer-button"
+            }
+          >
+            <span aria-hidden="true">↺</span>
+            导入加密备份
+            <input
+              type="file"
+              accept=".yuemi,application/json"
+              disabled={transferBusy}
+              onChange={importEncryptedBackup}
+            />
+          </label>
+          <button
+            className="transfer-button primary"
+            type="button"
+            disabled={transferBusy}
+            onClick={() => void exportEncryptedBackup()}
+          >
+            <span aria-hidden="true">⇧</span>
+            导出加密备份
+          </button>
+        </div>
+        <div className="transfer-security-note">
+          <ShieldMark small />
+          <p>
+            备份文件使用主密码通过 PBKDF2 和 AES-GCM
+            加密，恢复时必须输入同一个主密码。Chrome / Edge
+            导出的原始 CSV 是明文文件，导入后请及时删除。
+          </p>
+        </div>
+        {transferStatus ? (
+          <p className="transfer-status" role="status" aria-live="polite">
+            {transferBusy ? <i aria-hidden="true" /> : <span>✓</span>}
+            {transferStatus}
+          </p>
+        ) : null}
       </section>
 
       <section className="panel settings-panel">

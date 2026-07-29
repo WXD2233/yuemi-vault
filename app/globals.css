@@ -1141,7 +1141,7 @@ textarea {
 }
 
 .transfer-panel {
-  margin-bottom: 20px;
+  margin-bottom: 0;
 }
 
 .transfer-heading {
@@ -2365,10 +2365,6 @@ textarea {
 
   .transfer-actions {
     grid-template-columns: 1fr;
-  }
-
-  .transfer-panel {
-    margin-bottom: 14px;
   }
 
   .option-card {

@@ -189,6 +189,15 @@ test("imports browser CSV locally and restores encrypted vault backups", async (
   assert.match(vaultRoute, /env\.DB\.batch/);
   assert.match(styles, /\.transfer-actions/);
   assert.match(styles, /\.transfer-security-note/);
+
+  const vaultViewSource = page.slice(
+    page.indexOf("function VaultView"),
+    page.indexOf("function SettingsView"),
+  );
+  const settingsViewSource = page.slice(page.indexOf("function SettingsView"));
+  assert.doesNotMatch(vaultViewSource, /vault-transfer-title/);
+  assert.match(settingsViewSource, /vault-transfer-title/);
+  assert.match(settingsViewSource, /handleImportEncryptedEntries/);
 });
 
 test("changes the master password by rotating encrypted records", async () => {
