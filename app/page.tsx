@@ -61,11 +61,14 @@ type VaultPayload = {
     smtpEnabled: boolean;
     smtpFeatureEnabled: boolean;
     smtpVerifiedAt: string | null;
+    requiresPasswordChange: boolean;
+    usesLegacyDefaultEncryption: boolean;
     hasSmtpSecret: boolean;
   };
 };
 
 const DEMO_CODE = "246810";
+const LEGACY_DEFAULT_RECORD_PASSWORD = "KeySafe2026!";
 const ENCRYPTED_RECORD_PREFIX = "yv2.";
 const encryptedStorageFields = {
   projectName: "加密记录",
@@ -137,6 +140,8 @@ const defaultPayload: VaultPayload = {
     smtpEnabled: false,
     smtpFeatureEnabled: false,
     smtpVerifiedAt: null,
+    requiresPasswordChange: true,
+    usesLegacyDefaultEncryption: false,
     hasSmtpSecret: false,
   },
 };
@@ -775,6 +780,39 @@ function ShieldMark({ small = false }: { small?: boolean }) {
   return <span className={small ? "shield-mark small" : "shield-mark"}>⌁</span>;
 }
 
+type MasterPasswordChangeHandler = (
+  currentPassword: string,
+  newPassword: string,
+) => Promise<{ ok: boolean; error?: string }>;
+
+function validateMasterPasswordChange(
+  currentPassword: string,
+  newPassword: string,
+  confirmPassword: string,
+) {
+  const passwordGroups = [
+    /[a-z]/.test(newPassword),
+    /[A-Z]/.test(newPassword),
+    /\d/.test(newPassword),
+    /[^A-Za-z0-9]/.test(newPassword),
+  ].filter(Boolean).length;
+
+  if (!currentPassword) return "请输入当前主密码";
+  if (newPassword.length < 10 || newPassword.length > 128) {
+    return "新主密码长度需为 10–128 位";
+  }
+  if (passwordGroups < 3) {
+    return "新主密码至少包含大写字母、小写字母、数字和符号中的三类";
+  }
+  if (newPassword !== confirmPassword) {
+    return "两次输入的新主密码不一致";
+  }
+  if (newPassword === currentPassword) {
+    return "新主密码不能与当前主密码相同";
+  }
+  return "";
+}
+
 export default function Home() {
   const [phase, setPhase] = useState<Phase>("locked");
   const [view, setView] = useState<AppView>("vault");
@@ -829,11 +867,16 @@ export default function Home() {
         const payload = (await response.json()) as VaultPayload;
         const entries = await hydrateVaultEntries(
           payload.entries,
-          unlockPassword,
+          payload.settings.usesLegacyDefaultEncryption
+            ? LEGACY_DEFAULT_RECORD_PASSWORD
+            : unlockPassword,
         );
-        setVault({ ...payload, entries });
+        const hydratedPayload = { ...payload, entries };
+        setVault(hydratedPayload);
+        return hydratedPayload;
       } catch {
         setToast("暂时无法读取密码库，请稍后重试");
+        return null;
       }
     },
     [],
@@ -1027,7 +1070,13 @@ export default function Home() {
       }
 
       setSessionToken(result.sessionToken);
-      await fetchVault(result.sessionToken, masterPassword);
+      const loadedVault = await fetchVault(
+        result.sessionToken,
+        masterPassword,
+      );
+      if (loadedVault?.settings.requiresPasswordChange) {
+        setView("settings");
+      }
       setPhase("vault");
       setToast("服务端校验通过");
     } catch {
@@ -1064,7 +1113,13 @@ export default function Home() {
       }
 
       setSessionToken(result.sessionToken);
-      await fetchVault(result.sessionToken, masterPassword);
+      const loadedVault = await fetchVault(
+        result.sessionToken,
+        masterPassword,
+      );
+      if (loadedVault?.settings.requiresPasswordChange) {
+        setView("settings");
+      }
       setPhase("vault");
       setToast("新设备验证成功");
     } catch {
@@ -1206,7 +1261,9 @@ export default function Home() {
     try {
       const entries = await preparePasswordChangeEntries(
         vault.entries,
-        currentPassword,
+        vault.settings.usesLegacyDefaultEncryption
+          ? LEGACY_DEFAULT_RECORD_PASSWORD
+          : currentPassword,
         newPassword,
       );
       await postVault({
@@ -1550,8 +1607,8 @@ export default function Home() {
             </button>
           ) : null}
           <div className="demo-hint">
-            <span>初始演示主密码（修改后失效）</span>
-            <strong>KeySafe2026!</strong>
+            <span>首次登录默认密码（登录后必须修改）</span>
+            <strong>12345678</strong>
           </div>
           <div className="security-note">
             <ShieldMark small />
@@ -1739,6 +1796,8 @@ export default function Home() {
     );
   }
 
+  const requiresPasswordChange = vault.settings.requiresPasswordChange;
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -1748,20 +1807,35 @@ export default function Home() {
         </div>
         <nav aria-label="主要导航">
           <button
-            className={view === "vault" ? "nav-item active" : "nav-item"}
+            className={
+              !requiresPasswordChange && view === "vault"
+                ? "nav-item active"
+                : "nav-item"
+            }
             onClick={() => setView("vault")}
+            disabled={requiresPasswordChange}
           >
             <span>▣</span>密码库
           </button>
           <button
-            className={view === "records" ? "nav-item active" : "nav-item"}
+            className={
+              !requiresPasswordChange && view === "records"
+                ? "nav-item active"
+                : "nav-item"
+            }
             onClick={() => setView("records")}
+            disabled={requiresPasswordChange}
           >
             <span>▤</span>密码记录
           </button>
           <button
-            className={view === "settings" ? "nav-item active" : "nav-item"}
+            className={
+              requiresPasswordChange || view === "settings"
+                ? "nav-item active"
+                : "nav-item"
+            }
             onClick={() => setView("settings")}
+            disabled={requiresPasswordChange}
           >
             <span>⚙</span>设置
           </button>
@@ -1779,14 +1853,18 @@ export default function Home() {
         <header className="topbar">
           <div>
             <span className="eyebrow">
-              {view === "settings"
+              {requiresPasswordChange
+                ? "首次使用 / 安全"
+                : view === "settings"
                 ? "设置 / 安全"
                 : view === "records"
                   ? "安全记录"
                   : "个人密码空间"}
             </span>
             <h1>
-              {view === "settings"
+              {requiresPasswordChange
+                ? "修改默认主密码"
+                : view === "settings"
                 ? "安全设置"
                 : view === "records"
                   ? "密码记录"
@@ -1833,7 +1911,11 @@ export default function Home() {
           </div>
         </header>
 
-        {view !== "settings" ? (
+        {requiresPasswordChange ? (
+          <ForcedPasswordChangeView
+            handleChangeMasterPassword={handleChangeMasterPassword}
+          />
+        ) : view !== "settings" ? (
           <VaultView
             vault={vault}
             recordsOnly={view === "records"}
@@ -2589,6 +2671,155 @@ function VaultView({
   );
 }
 
+function ForcedPasswordChangeView({
+  handleChangeMasterPassword,
+}: {
+  handleChangeMasterPassword: MasterPasswordChangeHandler;
+}) {
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordChangeError, setPasswordChangeError] = useState("");
+
+  async function submitPasswordChange(event: FormEvent) {
+    event.preventDefault();
+    const { currentPassword, newPassword, confirmPassword } = passwordForm;
+    const validationError = validateMasterPasswordChange(
+      currentPassword,
+      newPassword,
+      confirmPassword,
+    );
+    if (validationError) {
+      setPasswordChangeError(validationError);
+      return;
+    }
+
+    setPasswordChangeError("");
+    setChangingPassword(true);
+    const result = await handleChangeMasterPassword(
+      currentPassword,
+      newPassword,
+    );
+    if (!result.ok) {
+      setPasswordChangeError(result.error ?? "主密码修改失败");
+    }
+    setChangingPassword(false);
+  }
+
+  return (
+    <div className="settings-layout forced-password-layout">
+      <section className="panel forced-password-intro">
+        <div className="forced-password-icon" aria-hidden="true">
+          !
+        </div>
+        <div>
+          <span className="eyebrow">首次使用安全检查</span>
+          <h2>请先修改默认主密码</h2>
+          <p>
+            默认密码仅用于第一次进入。在设置新的主密码前，密码库、密码记录及其他设置均不可访问。
+          </p>
+        </div>
+      </section>
+
+      <section className="panel settings-panel password-change-panel forced">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">必须完成</span>
+            <h2>设置你的主密码</h2>
+          </div>
+          <span className="policy-status">整库重新加密</span>
+        </div>
+        <form
+          className="password-change-form"
+          onSubmit={submitPasswordChange}
+        >
+          <label className="current-password-field">
+            当前默认密码
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={passwordForm.currentPassword}
+              onChange={(event) =>
+                setPasswordForm((current) => ({
+                  ...current,
+                  currentPassword: event.target.value,
+                }))
+              }
+              placeholder="输入默认密码 12345678"
+              disabled={changingPassword}
+              autoFocus
+            />
+          </label>
+          <div className="password-change-grid">
+            <label>
+              新主密码
+              <input
+                type="password"
+                autoComplete="new-password"
+                minLength={10}
+                maxLength={128}
+                value={passwordForm.newPassword}
+                onChange={(event) =>
+                  setPasswordForm((current) => ({
+                    ...current,
+                    newPassword: event.target.value,
+                  }))
+                }
+                placeholder="输入 10–128 位新主密码"
+                disabled={changingPassword}
+              />
+            </label>
+            <label>
+              确认新主密码
+              <input
+                type="password"
+                autoComplete="new-password"
+                minLength={10}
+                maxLength={128}
+                value={passwordForm.confirmPassword}
+                onChange={(event) =>
+                  setPasswordForm((current) => ({
+                    ...current,
+                    confirmPassword: event.target.value,
+                  }))
+                }
+                placeholder="再次输入新主密码"
+                disabled={changingPassword}
+              />
+            </label>
+          </div>
+          <div className="password-change-footer">
+            <p>
+              新主密码至少包含大写字母、小写字母、数字和符号中的三类。
+            </p>
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={changingPassword}
+            >
+              {changingPassword ? "正在安全更新…" : "修改密码并重新登录"}
+            </button>
+          </div>
+          {passwordChangeError ? (
+            <p className="form-error" role="alert">
+              {passwordChangeError}
+            </p>
+          ) : null}
+        </form>
+        <div className="security-callout password-change-callout">
+          <ShieldMark small />
+          <p>
+            修改成功后，默认密码立即失效，所有设备都必须使用新主密码重新登录。
+          </p>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function SettingsView({
   vault,
   deviceId,
@@ -2613,10 +2844,7 @@ function SettingsView({
   handleImportEncryptedEntries: (
     entries: ImportableEncryptedEntry[],
   ) => Promise<number>;
-  handleChangeMasterPassword: (
-    currentPassword: string,
-    newPassword: string,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  handleChangeMasterPassword: MasterPasswordChangeHandler;
   handleToggleTwoFactor: () => void;
   handleLockoutPolicy: (
     maxFailedAttempts: number,
@@ -2815,38 +3043,18 @@ function SettingsView({
 
   async function changeMasterPassword(event: FormEvent) {
     event.preventDefault();
-    setPasswordChangeError("");
     const { currentPassword, newPassword, confirmPassword } = passwordForm;
-    const passwordGroups = [
-      /[a-z]/.test(newPassword),
-      /[A-Z]/.test(newPassword),
-      /\d/.test(newPassword),
-      /[^A-Za-z0-9]/.test(newPassword),
-    ].filter(Boolean).length;
-
-    if (!currentPassword) {
-      setPasswordChangeError("请输入当前主密码");
-      return;
-    }
-    if (newPassword.length < 10 || newPassword.length > 128) {
-      setPasswordChangeError("新主密码长度需为 10–128 位");
-      return;
-    }
-    if (passwordGroups < 3) {
-      setPasswordChangeError(
-        "新主密码至少包含大写字母、小写字母、数字和符号中的三类",
-      );
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setPasswordChangeError("两次输入的新主密码不一致");
-      return;
-    }
-    if (newPassword === currentPassword) {
-      setPasswordChangeError("新主密码不能与当前主密码相同");
+    const validationError = validateMasterPasswordChange(
+      currentPassword,
+      newPassword,
+      confirmPassword,
+    );
+    if (validationError) {
+      setPasswordChangeError(validationError);
       return;
     }
 
+    setPasswordChangeError("");
     setChangingPassword(true);
     const result = await handleChangeMasterPassword(
       currentPassword,

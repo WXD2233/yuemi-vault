@@ -8,6 +8,10 @@ import {
 import { ensureVaultSchema } from "../../../../db/ensure";
 import { getReadySmtpConfig } from "../../../../db/smtp-config";
 import { sendSmtpMail } from "../../../../db/smtp";
+import {
+  DEFAULT_MASTER_PASSWORD,
+  LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
+} from "../../../../db/security-constants";
 
 export const dynamic = "force-dynamic";
 
@@ -85,7 +89,14 @@ export async function POST(request: Request) {
     }
 
     const providedHash = await hashMasterPassword(masterPassword);
-    if (providedHash !== settings.masterPasswordHash) {
+    const acceptedLegacyDefault =
+      settings.masterPasswordHash ===
+        LEGACY_DEFAULT_MASTER_PASSWORD_HASH &&
+      masterPassword === DEFAULT_MASTER_PASSWORD;
+    if (
+      providedHash !== settings.masterPasswordHash &&
+      !acceptedLegacyDefault
+    ) {
       const failedCount = (attempt?.failedCount ?? 0) + 1;
       const shouldLock = failedCount >= settings.maxFailedAttempts;
       const lockedUntil = shouldLock

@@ -18,6 +18,11 @@ import {
 } from "../../../db/smtp-config";
 import { sendSmtpMail } from "../../../db/smtp";
 import {
+  DEFAULT_MASTER_PASSWORD,
+  DEFAULT_MASTER_PASSWORD_HASH,
+  LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
+} from "../../../db/security-constants";
+import {
   securitySettings,
   trustedDevices,
   vaultEntries,
@@ -111,6 +116,13 @@ export async function GET(request: Request) {
             smtpEnabled: settings.smtpEnabled,
             smtpFeatureEnabled: settings.smtpFeatureEnabled,
             smtpVerifiedAt: settings.smtpVerifiedAt,
+            requiresPasswordChange:
+              settings.masterPasswordHash === DEFAULT_MASTER_PASSWORD_HASH ||
+              settings.masterPasswordHash ===
+                LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
+            usesLegacyDefaultEncryption:
+              settings.masterPasswordHash ===
+              LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
             hasSmtpSecret: Boolean(
               settings.smtpSecretCipher && settings.smtpSecretIv,
             ),
@@ -129,6 +141,8 @@ export async function GET(request: Request) {
             smtpEnabled: false,
             smtpFeatureEnabled: false,
             smtpVerifiedAt: null,
+            requiresPasswordChange: true,
+            usesLegacyDefaultEncryption: false,
             hasSmtpSecret: false,
           },
     });
@@ -148,6 +162,24 @@ export async function POST(request: Request) {
     const payload = (await request.json()) as Record<string, unknown>;
     const action = String(payload.action ?? "");
     const db = getDb();
+
+    if (action !== "change-master-password") {
+      const settings = await db
+        .select({ masterPasswordHash: securitySettings.masterPasswordHash })
+        .from(securitySettings)
+        .where(eq(securitySettings.id, 1))
+        .limit(1);
+      if (
+        settings[0]?.masterPasswordHash === DEFAULT_MASTER_PASSWORD_HASH ||
+        settings[0]?.masterPasswordHash ===
+          LEGACY_DEFAULT_MASTER_PASSWORD_HASH
+      ) {
+        return Response.json(
+          { error: "首次进入必须先修改默认主密码" },
+          { status: 428 },
+        );
+      }
+    }
 
     if (action === "change-master-password") {
       const currentPassword = String(payload.currentPassword ?? "");
@@ -189,9 +221,14 @@ export async function POST(request: Request) {
         .where(eq(securitySettings.id, 1))
         .limit(1);
       const currentHash = await hashMasterPassword(currentPassword);
+      const acceptedLegacyDefault =
+        settings[0]?.masterPasswordHash ===
+          LEGACY_DEFAULT_MASTER_PASSWORD_HASH &&
+        currentPassword === DEFAULT_MASTER_PASSWORD;
       if (
         !settings[0]?.masterPasswordHash ||
-        currentHash !== settings[0].masterPasswordHash
+        (currentHash !== settings[0].masterPasswordHash &&
+          !acceptedLegacyDefault)
       ) {
         return Response.json(
           { error: "当前主密码不正确" },

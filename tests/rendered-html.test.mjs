@@ -12,7 +12,8 @@ test("builds the 钥密 unlock experience", async () => {
   assert.match(layout, /钥密 · 安全密码管理器/);
   assert.match(page, /解锁钥密/);
   assert.match(page, /请输入主密码进入你的加密密码库/);
-  assert.match(page, /KeySafe2026!/);
+  assert.match(page, /首次登录默认密码/);
+  assert.match(page, /12345678/);
   assert.doesNotMatch(
     `${page}\n${layout}`,
     /codex-preview|SkeletonPreview|react-loading-skeleton/,
@@ -77,7 +78,7 @@ test("encrypts complete vault records while retaining demo access", async () => 
   ]);
 
   assert.match(page, /const DEMO_CODE = "246810"/);
-  assert.match(page, /KeySafe2026!/);
+  assert.match(page, /LEGACY_DEFAULT_RECORD_PASSWORD/);
   assert.match(page, /ENCRYPTED_RECORD_PREFIX = "yv2\."/);
   assert.match(page, /encryptVaultRecord/);
   assert.match(page, /decryptVaultRecord/);
@@ -105,7 +106,7 @@ test("only exposes password recovery after email and SMTP are configured", async
   assert.match(page, /result\.error \?\? "保存失败"/);
   assert.match(vaultRoute, /set-recovery-email/);
   assert.match(recoveryRoute, /const DEMO_CODE = "246810"/);
-  assert.match(recoveryRoute, /const DEMO_MASTER_PASSWORD = "KeySafe2026!"/);
+  assert.match(recoveryRoute, /DEFAULT_MASTER_PASSWORD/);
   assert.match(recoveryRoute, /action === "request-code"/);
   assert.match(recoveryRoute, /action === "verify-code"/);
   assert.match(recoveryRoute, /action === "send-password"/);
@@ -222,4 +223,36 @@ test("changes the master password by rotating encrypted records", async () => {
   assert.match(auth, /PBKDF2/);
   assert.match(styles, /\.password-change-form/);
   assert.match(styles, /\.password-change-grid/);
+});
+
+test("forces the first login to replace the default password", async () => {
+  const [page, vaultRoute, unlockRoute, ensure, constants, styles] =
+    await Promise.all([
+      readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../app/api/vault/route.ts", import.meta.url), "utf8"),
+      readFile(
+        new URL("../app/api/auth/unlock/route.ts", import.meta.url),
+        "utf8",
+      ),
+      readFile(new URL("../db/ensure.ts", import.meta.url), "utf8"),
+      readFile(
+        new URL("../db/security-constants.ts", import.meta.url),
+        "utf8",
+      ),
+      readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    ]);
+
+  assert.match(constants, /DEFAULT_MASTER_PASSWORD = "12345678"/);
+  assert.match(ensure, /DEFAULT_MASTER_PASSWORD_HASH/);
+  assert.match(page, /requiresPasswordChange/);
+  assert.match(page, /ForcedPasswordChangeView/);
+  assert.match(page, /请先修改默认主密码/);
+  assert.match(page, /默认密码仅用于第一次进入/);
+  assert.match(page, /disabled=\{requiresPasswordChange\}/);
+  assert.match(vaultRoute, /首次进入必须先修改默认主密码/);
+  assert.match(vaultRoute, /status: 428/);
+  assert.match(vaultRoute, /usesLegacyDefaultEncryption/);
+  assert.match(unlockRoute, /acceptedLegacyDefault/);
+  assert.match(styles, /\.forced-password-layout/);
+  assert.match(styles, /\.nav-item:disabled/);
 });

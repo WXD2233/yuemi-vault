@@ -1,8 +1,10 @@
 import { env } from "cloudflare:workers";
+import {
+  DEFAULT_MASTER_PASSWORD_HASH,
+  LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
+} from "./security-constants";
 
-const MASTER_PASSWORD_HASH =
-  "8feb66c7949b28c70e3e2782a43b08cdec387a3f9fb24ac3877980084ac7f14c";
-const PREVIOUS_MASTER_PASSWORD_HASH =
+const OLDER_MASTER_PASSWORD_HASH =
   "3651389d80ea709f76a95ec93ca42343eb35a31525020cc9b7a58100159a139c";
 const LEGACY_MASTER_PASSWORD_HASH =
   "c079208ec8d20c1aab38ffdc12de7252735ba1ab334e19b56bc1c237f89aaced";
@@ -41,7 +43,7 @@ export async function ensureVaultSchema() {
         id INTEGER PRIMARY KEY NOT NULL,
         two_factor_enabled INTEGER NOT NULL DEFAULT 1,
         email TEXT NOT NULL DEFAULT 'w***@example.com',
-        master_password_hash TEXT NOT NULL DEFAULT '${MASTER_PASSWORD_HASH}',
+        master_password_hash TEXT NOT NULL DEFAULT '${DEFAULT_MASTER_PASSWORD_HASH}',
         max_failed_attempts INTEGER NOT NULL DEFAULT 5,
         lockout_minutes INTEGER NOT NULL DEFAULT 15,
         smtp_provider TEXT NOT NULL DEFAULT '',
@@ -104,7 +106,7 @@ export async function ensureVaultSchema() {
 
   if (!existingColumns.has("master_password_hash")) {
     await env.DB.prepare(
-      `ALTER TABLE security_settings ADD COLUMN master_password_hash TEXT NOT NULL DEFAULT '${MASTER_PASSWORD_HASH}'`,
+      `ALTER TABLE security_settings ADD COLUMN master_password_hash TEXT NOT NULL DEFAULT '${DEFAULT_MASTER_PASSWORD_HASH}'`,
     ).run();
   }
   if (!existingColumns.has("max_failed_attempts")) {
@@ -177,9 +179,18 @@ export async function ensureVaultSchema() {
     "UPDATE security_settings SET master_password_hash = ? WHERE id = 1 AND master_password_hash IN (?, ?)",
   )
     .bind(
-      MASTER_PASSWORD_HASH,
-      PREVIOUS_MASTER_PASSWORD_HASH,
+      DEFAULT_MASTER_PASSWORD_HASH,
+      OLDER_MASTER_PASSWORD_HASH,
       LEGACY_MASTER_PASSWORD_HASH,
+    )
+    .run();
+
+  await env.DB.prepare(
+    "UPDATE security_settings SET master_password_hash = ? WHERE id = 1 AND master_password_hash = ? AND NOT EXISTS (SELECT 1 FROM vault_entries WHERE password_cipher != 'encrypted-demo-value' AND password_iv != 'demo-iv')",
+  )
+    .bind(
+      DEFAULT_MASTER_PASSWORD_HASH,
+      LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
     )
     .run();
 
@@ -281,7 +292,7 @@ export async function ensureVaultSchema() {
     seedStatements.push(
       env.DB.prepare(
         "INSERT INTO security_settings (id, two_factor_enabled, email, master_password_hash, max_failed_attempts, lockout_minutes) VALUES (1, 1, ?, ?, 5, 15)",
-      ).bind("w***@example.com", MASTER_PASSWORD_HASH),
+      ).bind("w***@example.com", DEFAULT_MASTER_PASSWORD_HASH),
     );
   }
 

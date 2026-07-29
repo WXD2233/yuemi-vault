@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { DEFAULT_MASTER_PASSWORD_HASH } from "./security-constants";
 
 export const vaultEntries = sqliteTable("vault_entries", {
   id: text("id").primaryKey(),
@@ -30,9 +31,7 @@ export const securitySettings = sqliteTable("security_settings", {
   email: text("email").notNull().default("w***@example.com"),
   masterPasswordHash: text("master_password_hash")
     .notNull()
-    .default(
-      "8feb66c7949b28c70e3e2782a43b08cdec387a3f9fb24ac3877980084ac7f14c",
-    ),
+    .default(DEFAULT_MASTER_PASSWORD_HASH),
   maxFailedAttempts: integer("max_failed_attempts").notNull().default(5),
   lockoutMinutes: integer("lockout_minutes").notNull().default(15),
   smtpProvider: text("smtp_provider").notNull().default(""),

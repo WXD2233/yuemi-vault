@@ -10,11 +10,11 @@ import {
   getStoredSmtpConfig,
 } from "../../../../db/smtp-config";
 import { sendSmtpMail } from "../../../../db/smtp";
+import { DEFAULT_MASTER_PASSWORD } from "../../../../db/security-constants";
 
 export const dynamic = "force-dynamic";
 
 const DEMO_CODE = "246810";
-const DEMO_MASTER_PASSWORD = "KeySafe2026!";
 const RECOVERY_CHALLENGE_DEVICE = "password-recovery";
 
 function isNotificationEmailConfigured(email: string) {
@@ -180,15 +180,17 @@ export async function POST(request: Request) {
         to: configuredEmail,
         subject: "钥密新的主密码",
         text: [
-          "你的钥密演示主密码已重新设置。",
+          "你的钥密默认主密码已重新设置。",
           "",
-          `新主密码：${DEMO_MASTER_PASSWORD}`,
+          `新主密码：${DEFAULT_MASTER_PASSWORD}`,
           "",
-          "请使用新主密码登录。为安全起见，请勿转发此邮件。",
+          "请使用默认主密码登录，并立即设置新的主密码。为安全起见，请勿转发此邮件。",
         ].join("\n"),
       });
 
-      const demoPasswordHash = await hashMasterPassword(DEMO_MASTER_PASSWORD);
+      const demoPasswordHash = await hashMasterPassword(
+        DEFAULT_MASTER_PASSWORD,
+      );
       await env.DB.batch([
         env.DB.prepare(
           "UPDATE security_settings SET master_password_hash = ? WHERE id = 1",

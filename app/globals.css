@@ -556,6 +556,12 @@ textarea {
   border-color: rgba(47, 212, 157, 0.14);
 }
 
+.nav-item:disabled:not(.active) {
+  color: var(--muted);
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
 .sidebar-security {
   display: flex;
   align-items: center;
@@ -1678,6 +1684,52 @@ textarea {
   margin-top: 17px;
 }
 
+.forced-password-layout {
+  width: min(100%, 820px);
+}
+
+.forced-password-intro {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+  padding: 24px 26px;
+  border-color: rgba(47, 212, 157, 0.34);
+  background:
+    linear-gradient(135deg, rgba(47, 212, 157, 0.12), transparent 60%),
+    var(--panel);
+}
+
+.forced-password-intro h2 {
+  margin-top: 5px;
+  font-size: 21px;
+}
+
+.forced-password-intro p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.forced-password-icon {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(47, 212, 157, 0.34);
+  border-radius: 16px;
+  color: #05251b;
+  background: var(--green);
+  font-size: 22px;
+  font-weight: 900;
+  box-shadow: 0 10px 30px rgba(47, 212, 157, 0.18);
+}
+
+.password-change-panel.forced {
+  border-color: rgba(47, 212, 157, 0.24);
+}
+
 .smtp-config-form {
   display: grid;
   gap: 15px;
@@ -2536,6 +2588,10 @@ textarea {
   .login-protection-email-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .forced-password-intro {
+    grid-template-columns: 1fr;
   }
 
   .table-footer,
