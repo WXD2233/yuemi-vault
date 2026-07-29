@@ -314,6 +314,340 @@ async function decryptVaultRecord(
   return payload;
 }
 
+type ImportableEncryptedEntry = {
+  passwordCipher: string;
+  passwordIv: string;
+};
+
+type BrowserPasswordRow = {
+  projectName: string;
+  account: string;
+  category: string;
+  notes: string;
+  password: string;
+};
+
+type EncryptedBackupDocument = {
+  format: "yuemi-encrypted-vault-backup";
+  version: 1;
+  createdAt: string;
+  recordCount: number;
+  kdf: {
+    name: "PBKDF2";
+    hash: "SHA-256";
+    iterations: number;
+    salt: string;
+  };
+  cipher: {
+    name: "AES-GCM";
+    iv: string;
+    data: string;
+  };
+};
+
+const BACKUP_KDF_ITERATIONS = 150_000;
+
+async function deriveBackupKey(
+  masterPassword: string,
+  salt: Uint8Array,
+  iterations: number,
+) {
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(masterPassword),
+    "PBKDF2",
+    false,
+    ["deriveKey"],
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      salt,
+      iterations,
+    },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+async function encryptVaultRecordsBatch(
+  records: BrowserPasswordRow[],
+  masterPassword: string,
+): Promise<ImportableEncryptedEntry[]> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await deriveVaultKey(masterPassword, salt);
+  const saltValue = bytesToBase64(salt);
+
+  return Promise.all(
+    records.map(async (record) => {
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const cipher = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        key,
+        new TextEncoder().encode(
+          JSON.stringify({
+            version: 2,
+            projectName: record.projectName,
+            account: record.account,
+            category: record.category,
+            notes: record.notes,
+            password: record.password,
+          } satisfies VaultSecretPayload),
+        ),
+      );
+      return {
+        passwordCipher: `${ENCRYPTED_RECORD_PREFIX}${saltValue}.${bytesToBase64(
+          new Uint8Array(cipher),
+        )}`,
+        passwordIv: bytesToBase64(iv),
+      };
+    }),
+  );
+}
+
+function parseCsvRows(text: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let value = "";
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quoted) {
+      if (character === '"' && text[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else if (character === '"') {
+        quoted = false;
+      } else {
+        value += character;
+      }
+    } else if (character === '"') {
+      quoted = true;
+    } else if (character === ",") {
+      row.push(value);
+      value = "";
+    } else if (character === "\n") {
+      row.push(value.replace(/\r$/, ""));
+      rows.push(row);
+      row = [];
+      value = "";
+    } else {
+      value += character;
+    }
+  }
+
+  if (value || row.length) {
+    row.push(value.replace(/\r$/, ""));
+    rows.push(row);
+  }
+  return rows.filter((columns) => columns.some((column) => column.trim()));
+}
+
+function parseBrowserPasswordCsv(text: string) {
+  const rows = parseCsvRows(text.replace(/^\uFEFF/, ""));
+  if (rows.length < 2) {
+    throw new Error("CSV 中没有可导入的密码记录");
+  }
+
+  const headers = rows[0].map((header) => header.trim().toLowerCase());
+  const findHeader = (...names: string[]) =>
+    headers.findIndex((header) => names.includes(header));
+  const nameIndex = findHeader("name", "title", "site", "网站", "名称");
+  const urlIndex = findHeader("url", "website", "origin", "网址");
+  const usernameIndex = findHeader(
+    "username",
+    "user",
+    "login_username",
+    "账号",
+    "用户名",
+  );
+  const passwordIndex = findHeader("password", "密码");
+  const noteIndex = findHeader("note", "notes", "备注");
+
+  if (passwordIndex < 0) {
+    throw new Error("无法识别 CSV：缺少 password 密码列");
+  }
+
+  const parsed = rows.slice(1).flatMap((columns, index) => {
+    const password = columns[passwordIndex]?.trim() ?? "";
+    if (!password) return [];
+    const url = urlIndex >= 0 ? columns[urlIndex]?.trim() ?? "" : "";
+    let projectName =
+      nameIndex >= 0 ? columns[nameIndex]?.trim() ?? "" : "";
+    if (!projectName && url) {
+      try {
+        projectName = new URL(url).hostname.replace(/^www\./, "");
+      } catch {
+        projectName = url.slice(0, 80);
+      }
+    }
+    const originalNote =
+      noteIndex >= 0 ? columns[noteIndex]?.trim() ?? "" : "";
+    return [
+      {
+        projectName: (projectName || `浏览器密码 ${index + 1}`).slice(0, 120),
+        account:
+          (usernameIndex >= 0
+            ? columns[usernameIndex]?.trim()
+            : "") || "未填写账号",
+        category: "浏览器导入",
+        notes: [url ? `网址：${url}` : "", originalNote]
+          .filter(Boolean)
+          .join("\n")
+          .slice(0, 2000),
+        password,
+      },
+    ];
+  });
+
+  if (!parsed.length) {
+    throw new Error("CSV 中没有包含密码的有效记录");
+  }
+  if (parsed.length > 1000) {
+    throw new Error("单次最多导入 1000 条密码记录");
+  }
+  return parsed;
+}
+
+async function createEncryptedBackup(
+  entries: VaultEntry[],
+  masterPassword: string,
+) {
+  const records = entries
+    .filter(
+      (entry) =>
+        !entry.decryptionError &&
+        entry.passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX),
+    )
+    .map((entry) => ({
+      passwordCipher: entry.passwordCipher,
+      passwordIv: entry.passwordIv,
+    }));
+  if (!records.length) {
+    throw new Error("当前没有可备份的加密密码记录");
+  }
+
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveBackupKey(
+    masterPassword,
+    salt,
+    BACKUP_KDF_ITERATIONS,
+  );
+  const plain = new TextEncoder().encode(
+    JSON.stringify({
+      format: "yuemi-vault-records",
+      version: 1,
+      records,
+    }),
+  );
+  const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plain);
+
+  return {
+    backup: {
+      format: "yuemi-encrypted-vault-backup",
+      version: 1,
+      createdAt: new Date().toISOString(),
+      recordCount: records.length,
+      kdf: {
+        name: "PBKDF2",
+        hash: "SHA-256",
+        iterations: BACKUP_KDF_ITERATIONS,
+        salt: bytesToBase64(salt),
+      },
+      cipher: {
+        name: "AES-GCM",
+        iv: bytesToBase64(iv),
+        data: bytesToBase64(new Uint8Array(cipher)),
+      },
+    } satisfies EncryptedBackupDocument,
+    skipped: entries.length - records.length,
+  };
+}
+
+async function decryptEncryptedBackup(
+  text: string,
+  masterPassword: string,
+): Promise<ImportableEncryptedEntry[]> {
+  let document: EncryptedBackupDocument;
+  try {
+    document = JSON.parse(text) as EncryptedBackupDocument;
+  } catch {
+    throw new Error("备份文件格式不正确");
+  }
+  if (
+    document.format !== "yuemi-encrypted-vault-backup" ||
+    document.version !== 1 ||
+    document.kdf?.name !== "PBKDF2" ||
+    document.kdf.hash !== "SHA-256" ||
+    document.kdf.iterations !== BACKUP_KDF_ITERATIONS ||
+    document.cipher?.name !== "AES-GCM"
+  ) {
+    throw new Error("不支持的钥密备份文件");
+  }
+
+  try {
+    const key = await deriveBackupKey(
+      masterPassword,
+      base64ToBytes(document.kdf.salt),
+      document.kdf.iterations,
+    );
+    const plain = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: base64ToBytes(document.cipher.iv) },
+      key,
+      base64ToBytes(document.cipher.data),
+    );
+    const payload = JSON.parse(new TextDecoder().decode(plain)) as {
+      format?: string;
+      version?: number;
+      records?: ImportableEncryptedEntry[];
+    };
+    if (
+      payload.format !== "yuemi-vault-records" ||
+      payload.version !== 1 ||
+      !Array.isArray(payload.records) ||
+      !payload.records.length ||
+      payload.records.length > 2000 ||
+      payload.records.some(
+        (record) =>
+          typeof record.passwordCipher !== "string" ||
+          !record.passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX) ||
+          typeof record.passwordIv !== "string" ||
+          !record.passwordIv,
+      )
+    ) {
+      throw new Error("备份内容校验失败");
+    }
+    return payload.records;
+  } catch (error) {
+    if (error instanceof Error && error.message === "备份内容校验失败") {
+      throw error;
+    }
+    throw new Error("备份解密失败，请确认主密码和文件是否正确");
+  }
+}
+
+function downloadEncryptedBackup(
+  backup: EncryptedBackupDocument,
+  filename: string,
+) {
+  const blob = new Blob([JSON.stringify(backup, null, 2)], {
+    type: "application/vnd.yuemi.vault+json",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function hydrateVaultEntries(
   entries: VaultEntry[],
   masterPassword: string,
@@ -713,6 +1047,19 @@ export default function Home() {
     } catch {
       setToast("保存失败，请稍后重试");
     }
+  }
+
+  async function handleImportEncryptedEntries(
+    entries: ImportableEncryptedEntry[],
+  ) {
+    const result = await postVault({
+      action: "import-entries",
+      entries,
+    });
+    const imported = Number(result.imported ?? 0);
+    await fetchVault(sessionToken, masterPassword);
+    setToast(`已安全导入 ${imported} 条密码记录`);
+    return imported;
   }
 
   async function handleUpdateEntry(
@@ -1403,6 +1750,7 @@ export default function Home() {
             entryForm={entryForm}
             setEntryForm={setEntryForm}
             handleAddEntry={handleAddEntry}
+            handleImportEncryptedEntries={handleImportEncryptedEntries}
             handleUpdateEntry={handleUpdateEntry}
           />
         ) : (
@@ -1504,6 +1852,9 @@ type VaultViewProps = {
     }>
   >;
   handleAddEntry: (event: FormEvent) => void;
+  handleImportEncryptedEntries: (
+    entries: ImportableEncryptedEntry[],
+  ) => Promise<number>;
   handleUpdateEntry: (
     id: string,
     values: {
@@ -1583,6 +1934,7 @@ function VaultView({
   entryForm,
   setEntryForm,
   handleAddEntry,
+  handleImportEncryptedEntries,
   handleUpdateEntry,
 }: VaultViewProps) {
   const [revealedSecret, setRevealedSecret] = useState<{
@@ -1602,6 +1954,94 @@ function VaultView({
     password: "",
     notes: "",
   });
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferStatus, setTransferStatus] = useState("");
+
+  async function exportEncryptedBackup() {
+    if (transferBusy) return;
+    setTransferBusy(true);
+    setTransferStatus("正在创建加密备份…");
+    try {
+      const { backup, skipped } = await createEncryptedBackup(
+        vault.entries,
+        masterPassword,
+      );
+      const date = new Date().toISOString().slice(0, 10);
+      downloadEncryptedBackup(backup, `yuemi-vault-${date}.yuemi`);
+      setTransferStatus(
+        `已导出 ${backup.recordCount} 条加密记录${
+          skipped ? `，跳过 ${skipped} 条内置演示或旧格式记录` : ""
+        }`,
+      );
+    } catch (error) {
+      setTransferStatus(
+        error instanceof Error ? error.message : "加密备份导出失败",
+      );
+    } finally {
+      setTransferBusy(false);
+    }
+  }
+
+  async function importBrowserPasswords(
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || transferBusy) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setTransferStatus("CSV 文件不能超过 5 MB");
+      return;
+    }
+
+    setTransferBusy(true);
+    setTransferStatus("正在本地解析并加密浏览器密码…");
+    try {
+      const records = parseBrowserPasswordCsv(await file.text());
+      const encrypted = await encryptVaultRecordsBatch(
+        records,
+        masterPassword,
+      );
+      const imported = await handleImportEncryptedEntries(encrypted);
+      setTransferStatus(
+        `已从 Chrome / Edge 安全导入 ${imported} 条记录；原 CSV 请及时删除`,
+      );
+    } catch (error) {
+      setTransferStatus(
+        error instanceof Error ? error.message : "浏览器密码导入失败",
+      );
+    } finally {
+      setTransferBusy(false);
+    }
+  }
+
+  async function importEncryptedBackup(
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || transferBusy) return;
+    if (file.size > 20 * 1024 * 1024) {
+      setTransferStatus("加密备份文件不能超过 20 MB");
+      return;
+    }
+
+    setTransferBusy(true);
+    setTransferStatus("正在本地验证并解密备份…");
+    try {
+      const records = await decryptEncryptedBackup(
+        await file.text(),
+        masterPassword,
+      );
+      const imported = await handleImportEncryptedEntries(records);
+      setTransferStatus(`已从加密备份恢复 ${imported} 条密码记录`);
+    } catch (error) {
+      setTransferStatus(
+        error instanceof Error ? error.message : "加密备份导入失败",
+      );
+    } finally {
+      setTransferBusy(false);
+    }
+  }
 
   async function revealPassword(entry: VaultEntry) {
     setRevealingId(entry.id);
@@ -1758,6 +2198,86 @@ function VaultView({
             <strong>强</strong>
           </div>
         </section>
+
+        {recordsOnly ? (
+          <section
+            className="panel transfer-panel"
+            aria-labelledby="vault-transfer-title"
+          >
+            <div className="section-heading transfer-heading">
+              <div>
+                <span className="eyebrow">导入与备份</span>
+                <h2 id="vault-transfer-title">迁移密码本</h2>
+              </div>
+              <span className="policy-status">本地加密处理</span>
+            </div>
+            <p className="settings-description">
+              支持 Chrome、Edge 导出的 CSV，以及钥密专用加密备份。浏览器
+              CSV 会先在当前设备加密，再上传密文。
+            </p>
+            <div className="transfer-actions">
+              <label
+                className={
+                  transferBusy
+                    ? "transfer-button disabled"
+                    : "transfer-button"
+                }
+              >
+                <span aria-hidden="true">⇩</span>
+                导入 Chrome / Edge
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  disabled={transferBusy}
+                  onChange={importBrowserPasswords}
+                />
+              </label>
+              <label
+                className={
+                  transferBusy
+                    ? "transfer-button disabled"
+                    : "transfer-button"
+                }
+              >
+                <span aria-hidden="true">↺</span>
+                导入加密备份
+                <input
+                  type="file"
+                  accept=".yuemi,application/json"
+                  disabled={transferBusy}
+                  onChange={importEncryptedBackup}
+                />
+              </label>
+              <button
+                className="transfer-button primary"
+                type="button"
+                disabled={transferBusy}
+                onClick={() => void exportEncryptedBackup()}
+              >
+                <span aria-hidden="true">⇧</span>
+                导出加密备份
+              </button>
+            </div>
+            <div className="transfer-security-note">
+              <ShieldMark small />
+              <p>
+                备份文件使用主密码通过 PBKDF2 和 AES-GCM
+                加密，恢复时必须输入同一个主密码。Chrome / Edge
+                导出的原始 CSV 是明文文件，导入后请及时删除。
+              </p>
+            </div>
+            {transferStatus ? (
+              <p
+                className="transfer-status"
+                role="status"
+                aria-live="polite"
+              >
+                {transferBusy ? <i aria-hidden="true" /> : <span>✓</span>}
+                {transferStatus}
+              </p>
+            ) : null}
+          </section>
+        ) : null}
 
         <section className="panel entries-panel" id="password-records">
           <div className="section-heading entries-heading">

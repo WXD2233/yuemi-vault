@@ -165,3 +165,28 @@ test("supports encrypted custom SMTP settings with optional presets", async () =
     /smtpSecretCipher:\s*settings\.smtpSecretCipher/,
   );
 });
+
+test("imports browser CSV locally and restores encrypted vault backups", async () => {
+  const [page, vaultRoute, styles] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/vault/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /parseBrowserPasswordCsv/);
+  assert.match(page, /encryptVaultRecordsBatch/);
+  assert.match(page, /Chrome \/ Edge/);
+  assert.match(page, /accept="\.csv,text\/csv"/);
+  assert.match(page, /yuemi-encrypted-vault-backup/);
+  assert.match(page, /PBKDF2/);
+  assert.match(page, /AES-GCM/);
+  assert.match(page, /downloadEncryptedBackup/);
+  assert.match(page, /decryptEncryptedBackup/);
+  assert.match(page, /\.yuemi/);
+  assert.match(page, /原始 CSV 是明文文件/);
+  assert.match(vaultRoute, /action === "import-entries"/);
+  assert.match(vaultRoute, /passwordCipher\.startsWith/);
+  assert.match(vaultRoute, /env\.DB\.batch/);
+  assert.match(styles, /\.transfer-actions/);
+  assert.match(styles, /\.transfer-security-note/);
+});

@@ -146,6 +146,69 @@ export async function POST(request: Request) {
     const action = String(payload.action ?? "");
     const db = getDb();
 
+    if (action === "import-entries") {
+      const entries = Array.isArray(payload.entries) ? payload.entries : [];
+      if (!entries.length || entries.length > 2000) {
+        return Response.json(
+          { error: "单次需要导入 1–2000 条加密记录" },
+          { status: 400 },
+        );
+      }
+
+      const encryptedEntries: Array<{
+        passwordCipher: string;
+        passwordIv: string;
+      }> = [];
+      for (const entry of entries) {
+        const record = entry as Record<string, unknown>;
+        const passwordCipher = String(record.passwordCipher ?? "");
+        const passwordIv = String(record.passwordIv ?? "");
+        if (
+          passwordCipher.length > 200_000 ||
+          passwordIv.length > 256 ||
+          !/^yv2\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+$/.test(passwordCipher) ||
+          !/^[A-Za-z0-9+/=]+$/.test(passwordIv)
+        ) {
+          return Response.json(
+            { error: "导入文件包含无效的加密密码记录" },
+            { status: 400 },
+          );
+        }
+        encryptedEntries.push({ passwordCipher, passwordIv });
+      }
+
+      const updatedAt = new Date()
+        .toISOString()
+        .slice(0, 16)
+        .replace("T", " ");
+      for (let offset = 0; offset < encryptedEntries.length; offset += 50) {
+        const chunk = encryptedEntries.slice(offset, offset + 50);
+        await env.DB.batch(
+          chunk.map((entry) =>
+            env.DB.prepare(
+              `INSERT INTO vault_entries
+                (id, project_name, account, category, security_status, password_cipher, password_iv, notes, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).bind(
+              crypto.randomUUID(),
+              encryptedStorageFields.projectName,
+              encryptedStorageFields.account,
+              encryptedStorageFields.category,
+              "安全",
+              entry.passwordCipher,
+              entry.passwordIv,
+              encryptedStorageFields.notes,
+              updatedAt,
+            ),
+          ),
+        );
+      }
+      return Response.json(
+        { ok: true, imported: encryptedEntries.length },
+        { status: 201 },
+      );
+    }
+
     if (action === "add-entry") {
       const projectName = String(payload.projectName ?? "").trim();
       const account = String(payload.account ?? "").trim();
