@@ -1550,7 +1550,7 @@ export default function Home() {
             </button>
           ) : null}
           <div className="demo-hint">
-            <span>演示主密码</span>
+            <span>初始演示主密码（修改后失效）</span>
             <strong>KeySafe2026!</strong>
           </div>
           <div className="security-note">
