@@ -1,7 +1,10 @@
 import { env } from "cloudflare:workers";
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { getVaultSession } from "../../../db/auth";
+import {
+  getVaultSession,
+  hashMasterPassword,
+} from "../../../db/auth";
 import { ensureVaultSchema } from "../../../db/ensure";
 import {
   decryptSmtpSecret,
@@ -145,6 +148,148 @@ export async function POST(request: Request) {
     const payload = (await request.json()) as Record<string, unknown>;
     const action = String(payload.action ?? "");
     const db = getDb();
+
+    if (action === "change-master-password") {
+      const currentPassword = String(payload.currentPassword ?? "");
+      const newPassword = String(payload.newPassword ?? "");
+      const entries = Array.isArray(payload.entries) ? payload.entries : [];
+      const passwordGroups = [
+        /[a-z]/.test(newPassword),
+        /[A-Z]/.test(newPassword),
+        /\d/.test(newPassword),
+        /[^A-Za-z0-9]/.test(newPassword),
+      ].filter(Boolean).length;
+
+      if (!currentPassword) {
+        return Response.json(
+          { error: "请输入当前主密码" },
+          { status: 400 },
+        );
+      }
+      if (
+        newPassword.length < 10 ||
+        newPassword.length > 128 ||
+        passwordGroups < 3
+      ) {
+        return Response.json(
+          { error: "新主密码需为 10–128 位，并至少包含三类字符" },
+          { status: 400 },
+        );
+      }
+      if (currentPassword === newPassword) {
+        return Response.json(
+          { error: "新主密码不能与当前主密码相同" },
+          { status: 400 },
+        );
+      }
+
+      const settings = await db
+        .select({ masterPasswordHash: securitySettings.masterPasswordHash })
+        .from(securitySettings)
+        .where(eq(securitySettings.id, 1))
+        .limit(1);
+      const currentHash = await hashMasterPassword(currentPassword);
+      if (
+        !settings[0]?.masterPasswordHash ||
+        currentHash !== settings[0].masterPasswordHash
+      ) {
+        return Response.json(
+          { error: "当前主密码不正确" },
+          { status: 403 },
+        );
+      }
+
+      const storedEntries = await db
+        .select({
+          id: vaultEntries.id,
+          passwordCipher: vaultEntries.passwordCipher,
+          passwordIv: vaultEntries.passwordIv,
+        })
+        .from(vaultEntries);
+      const recordsToRotate = storedEntries.filter(
+        (entry) =>
+          entry.passwordCipher !== "encrypted-demo-value" &&
+          entry.passwordIv !== "demo-iv",
+      );
+      if (recordsToRotate.length > 2000) {
+        return Response.json(
+          { error: "单次最多可更新 2000 条密码记录" },
+          { status: 400 },
+        );
+      }
+      if (entries.length !== recordsToRotate.length) {
+        return Response.json(
+          { error: "密码库内容已变化，请刷新页面后重试" },
+          { status: 409 },
+        );
+      }
+
+      const storedIds = new Set(recordsToRotate.map((entry) => entry.id));
+      const nextEntries: Array<{
+        id: string;
+        passwordCipher: string;
+        passwordIv: string;
+      }> = [];
+      const receivedIds = new Set<string>();
+      for (const entry of entries) {
+        const record = entry as Record<string, unknown>;
+        const id = String(record.id ?? "");
+        const passwordCipher = String(record.passwordCipher ?? "");
+        const passwordIv = String(record.passwordIv ?? "");
+        if (
+          !storedIds.has(id) ||
+          receivedIds.has(id) ||
+          passwordCipher.length > 200_000 ||
+          passwordIv.length > 256 ||
+          !/^yv2\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+$/.test(passwordCipher) ||
+          !/^[A-Za-z0-9+/=]+$/.test(passwordIv)
+        ) {
+          return Response.json(
+            { error: "主密码更新包含无效的加密记录" },
+            { status: 400 },
+          );
+        }
+        receivedIds.add(id);
+        nextEntries.push({ id, passwordCipher, passwordIv });
+      }
+
+      const newHash = await hashMasterPassword(newPassword);
+      const updatedAt = new Date()
+        .toISOString()
+        .slice(0, 16)
+        .replace("T", " ");
+      await env.DB.batch([
+        ...nextEntries.map((entry) =>
+          env.DB.prepare(
+            `UPDATE vault_entries
+             SET project_name = ?, account = ?, category = ?, notes = ?,
+                 password_cipher = ?, password_iv = ?, updated_at = ?
+             WHERE id = ?`,
+          ).bind(
+            encryptedStorageFields.projectName,
+            encryptedStorageFields.account,
+            encryptedStorageFields.category,
+            encryptedStorageFields.notes,
+            entry.passwordCipher,
+            entry.passwordIv,
+            updatedAt,
+            entry.id,
+          ),
+        ),
+        env.DB.prepare(
+          "UPDATE security_settings SET master_password_hash = ? WHERE id = 1",
+        ).bind(newHash),
+        env.DB.prepare("DELETE FROM vault_sessions"),
+        env.DB.prepare("DELETE FROM login_attempts"),
+        env.DB.prepare("DELETE FROM verification_challenges"),
+      ]);
+
+      return Response.json({
+        ok: true,
+        rotated: nextEntries.length,
+        sessionsRevoked: true,
+      });
+    }
 
     if (action === "import-entries") {
       const entries = Array.isArray(payload.entries) ? payload.entries : [];

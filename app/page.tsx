@@ -319,6 +319,10 @@ type ImportableEncryptedEntry = {
   passwordIv: string;
 };
 
+type PasswordChangeEntry = ImportableEncryptedEntry & {
+  id: string;
+};
+
 type BrowserPasswordRow = {
   projectName: string;
   account: string;
@@ -406,6 +410,64 @@ async function encryptVaultRecordsBatch(
       };
     }),
   );
+}
+
+async function preparePasswordChangeEntries(
+  entries: VaultEntry[],
+  currentPassword: string,
+  newPassword: string,
+): Promise<PasswordChangeEntry[]> {
+  const records = entries.filter(
+    (entry) =>
+      entry.passwordCipher !== "encrypted-demo-value" &&
+      entry.passwordIv !== "demo-iv",
+  );
+  if (records.length > 2000) {
+    throw new Error("单次最多可更新 2000 条密码记录");
+  }
+  if (records.some((entry) => entry.decryptionError)) {
+    throw new Error("密码库中存在无法解密的记录，请重新登录后再修改");
+  }
+
+  const plainRecords = await Promise.all(
+    records.map(async (entry) => {
+      if (entry.passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX)) {
+        return decryptVaultRecord(
+          entry.passwordCipher,
+          entry.passwordIv,
+          currentPassword,
+        );
+      }
+      return {
+        version: 2 as const,
+        projectName: entry.projectName,
+        account: entry.account,
+        category: entry.category,
+        notes: entry.notes,
+        password: await decryptLegacySecret(
+          entry.passwordCipher,
+          entry.passwordIv,
+          currentPassword,
+        ),
+      };
+    }),
+  );
+
+  const encryptedRecords = await encryptVaultRecordsBatch(
+    plainRecords.map((record) => ({
+      projectName: record.projectName,
+      account: record.account,
+      category: record.category,
+      notes: record.notes,
+      password: record.password,
+    })),
+    newPassword,
+  );
+
+  return encryptedRecords.map((record, index) => ({
+    id: records[index].id,
+    ...record,
+  }));
 }
 
 function parseCsvRows(text: string) {
@@ -1137,6 +1199,42 @@ export default function Home() {
     }
   }
 
+  async function handleChangeMasterPassword(
+    currentPassword: string,
+    newPassword: string,
+  ) {
+    try {
+      const entries = await preparePasswordChangeEntries(
+        vault.entries,
+        currentPassword,
+        newPassword,
+      );
+      await postVault({
+        action: "change-master-password",
+        currentPassword,
+        newPassword,
+        entries,
+      });
+
+      setMasterPassword("");
+      setSessionToken("");
+      setVault(defaultPayload);
+      setView("vault");
+      setPhase("locked");
+      setToast("主密码已修改，请使用新主密码重新登录");
+      return { ok: true };
+    } catch (error) {
+      const message =
+        error instanceof DOMException && error.name === "OperationError"
+          ? "当前主密码不正确，无法解密现有密码记录"
+          : error instanceof Error
+            ? error.message
+            : "主密码修改失败";
+      setToast(message);
+      return { ok: false, error: message };
+    }
+  }
+
   async function handleToggleTwoFactor() {
     if (
       !vault.settings.twoFactorEnabled &&
@@ -1759,6 +1857,7 @@ export default function Home() {
             deviceId={deviceId}
             theme={theme}
             setTheme={setTheme}
+            handleChangeMasterPassword={handleChangeMasterPassword}
             handleToggleTwoFactor={handleToggleTwoFactor}
             handleLockoutPolicy={handleLockoutPolicy}
             handleSaveRecoveryEmail={handleSaveRecoveryEmail}
@@ -2667,6 +2766,7 @@ function SettingsView({
   deviceId,
   theme,
   setTheme,
+  handleChangeMasterPassword,
   handleToggleTwoFactor,
   handleLockoutPolicy,
   handleSaveRecoveryEmail,
@@ -2679,6 +2779,10 @@ function SettingsView({
   deviceId: string;
   theme: ThemePreference;
   setTheme: (theme: ThemePreference) => void;
+  handleChangeMasterPassword: (
+    currentPassword: string,
+    newPassword: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
   handleToggleTwoFactor: () => void;
   handleLockoutPolicy: (
     maxFailedAttempts: number,
@@ -2723,6 +2827,13 @@ function SettingsView({
   );
   const [savingSmtp, setSavingSmtp] = useState(false);
   const [testingSmtp, setTestingSmtp] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordChangeError, setPasswordChangeError] = useState("");
 
   useEffect(() => {
     setNotificationEmail(
@@ -2778,6 +2889,51 @@ function SettingsView({
     setTestingSmtp(true);
     await handleTestSmtp();
     setTestingSmtp(false);
+  }
+
+  async function changeMasterPassword(event: FormEvent) {
+    event.preventDefault();
+    setPasswordChangeError("");
+    const { currentPassword, newPassword, confirmPassword } = passwordForm;
+    const passwordGroups = [
+      /[a-z]/.test(newPassword),
+      /[A-Z]/.test(newPassword),
+      /\d/.test(newPassword),
+      /[^A-Za-z0-9]/.test(newPassword),
+    ].filter(Boolean).length;
+
+    if (!currentPassword) {
+      setPasswordChangeError("请输入当前主密码");
+      return;
+    }
+    if (newPassword.length < 10 || newPassword.length > 128) {
+      setPasswordChangeError("新主密码长度需为 10–128 位");
+      return;
+    }
+    if (passwordGroups < 3) {
+      setPasswordChangeError(
+        "新主密码至少包含大写字母、小写字母、数字和符号中的三类",
+      );
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordChangeError("两次输入的新主密码不一致");
+      return;
+    }
+    if (newPassword === currentPassword) {
+      setPasswordChangeError("新主密码不能与当前主密码相同");
+      return;
+    }
+
+    setChangingPassword(true);
+    const result = await handleChangeMasterPassword(
+      currentPassword,
+      newPassword,
+    );
+    if (!result.ok) {
+      setPasswordChangeError(result.error ?? "主密码修改失败");
+    }
+    setChangingPassword(false);
   }
 
   function updateSmtpProvider(provider: string) {
@@ -2928,6 +3084,98 @@ function SettingsView({
           <ShieldMark small />
           <p>
             保存有效邮箱后即可修改上方开关，登录页也会出现“忘记主密码”。清空并保存会同时关闭这两项保护。
+          </p>
+        </div>
+      </section>
+
+      <section className="panel settings-panel password-change-panel">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">身份凭证</span>
+            <h2>修改主密码</h2>
+          </div>
+          <span className="policy-status">整库重新加密</span>
+        </div>
+        <p className="settings-description">
+          输入当前主密码进行验证。现有密码记录会在本机解密，再使用新主密码重新加密后提交。
+        </p>
+        <form className="password-change-form" onSubmit={changeMasterPassword}>
+          <label className="current-password-field">
+            当前主密码
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={passwordForm.currentPassword}
+              onChange={(event) =>
+                setPasswordForm((current) => ({
+                  ...current,
+                  currentPassword: event.target.value,
+                }))
+              }
+              placeholder="输入当前主密码"
+              disabled={changingPassword}
+            />
+          </label>
+          <div className="password-change-grid">
+            <label>
+              新主密码
+              <input
+                type="password"
+                autoComplete="new-password"
+                minLength={10}
+                maxLength={128}
+                value={passwordForm.newPassword}
+                onChange={(event) =>
+                  setPasswordForm((current) => ({
+                    ...current,
+                    newPassword: event.target.value,
+                  }))
+                }
+                placeholder="输入 10–128 位新主密码"
+                disabled={changingPassword}
+              />
+            </label>
+            <label>
+              确认新主密码
+              <input
+                type="password"
+                autoComplete="new-password"
+                minLength={10}
+                maxLength={128}
+                value={passwordForm.confirmPassword}
+                onChange={(event) =>
+                  setPasswordForm((current) => ({
+                    ...current,
+                    confirmPassword: event.target.value,
+                  }))
+                }
+                placeholder="再次输入新主密码"
+                disabled={changingPassword}
+              />
+            </label>
+          </div>
+          <div className="password-change-footer">
+            <p>
+              至少包含大写字母、小写字母、数字和符号中的三类。修改后所有设备都需要重新登录。
+            </p>
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={changingPassword}
+            >
+              {changingPassword ? "正在重新加密…" : "确认修改主密码"}
+            </button>
+          </div>
+          {passwordChangeError ? (
+            <p className="form-error" role="alert">
+              {passwordChangeError}
+            </p>
+          ) : null}
+        </form>
+        <div className="security-callout password-change-callout">
+          <ShieldMark small />
+          <p>
+            服务器只保存新主密码的校验哈希，不保存明文。此前导出的加密备份仍需使用导出时的旧主密码恢复。
           </p>
         </div>
       </section>

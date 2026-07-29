@@ -190,3 +190,27 @@ test("imports browser CSV locally and restores encrypted vault backups", async (
   assert.match(styles, /\.transfer-actions/);
   assert.match(styles, /\.transfer-security-note/);
 });
+
+test("changes the master password by rotating encrypted records", async () => {
+  const [page, vaultRoute, auth, styles] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/vault/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/auth.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /修改主密码/);
+  assert.match(page, /preparePasswordChangeEntries/);
+  assert.match(page, /action: "change-master-password"/);
+  assert.match(page, /当前主密码/);
+  assert.match(page, /确认新主密码/);
+  assert.match(page, /此前导出的加密备份仍需使用导出时的旧主密码恢复/);
+  assert.match(vaultRoute, /action === "change-master-password"/);
+  assert.match(vaultRoute, /hashMasterPassword\(currentPassword\)/);
+  assert.match(vaultRoute, /hashMasterPassword\(newPassword\)/);
+  assert.match(vaultRoute, /DELETE FROM vault_sessions/);
+  assert.match(vaultRoute, /DELETE FROM login_attempts/);
+  assert.match(auth, /PBKDF2/);
+  assert.match(styles, /\.password-change-form/);
+  assert.match(styles, /\.password-change-grid/);
+});

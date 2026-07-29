@@ -1495,6 +1495,7 @@ textarea {
 :root:is([data-theme="light"], [data-theme="glacier"]) .entry-form label,
 :root:is([data-theme="light"], [data-theme="glacier"]) .edit-entry-form label,
 :root:is([data-theme="light"], [data-theme="glacier"]) .recovery-email-form label,
+:root:is([data-theme="light"], [data-theme="glacier"]) .password-change-form label,
 :root:is([data-theme="light"], [data-theme="glacier"]) .smtp-config-form label,
 :root:is([data-theme="light"], [data-theme="glacier"]) .lockout-policy-grid label,
 :root:is([data-theme="light"], [data-theme="glacier"]) .length-row,
@@ -1630,6 +1631,51 @@ textarea {
 
 .recovery-email-form .primary-button {
   min-width: 116px;
+}
+
+.password-change-form {
+  display: grid;
+  gap: 14px;
+}
+
+.password-change-form label {
+  display: grid;
+  gap: 8px;
+  color: #c6d1df;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.password-change-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.current-password-field {
+  width: min(100%, 520px);
+}
+
+.password-change-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+}
+
+.password-change-footer p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.password-change-footer .primary-button {
+  min-width: 178px;
+}
+
+.password-change-callout {
+  margin-top: 17px;
 }
 
 .smtp-config-form {
@@ -2507,8 +2553,17 @@ textarea {
   }
 
   .smtp-form-grid,
-  .smtp-actions {
+  .smtp-actions,
+  .password-change-grid {
     grid-template-columns: 1fr;
+  }
+
+  .password-change-footer {
+    grid-template-columns: 1fr;
+  }
+
+  .password-change-footer .primary-button {
+    width: 100%;
   }
 
   .smtp-header-actions {
