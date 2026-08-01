@@ -1,98 +1,109 @@
-# vinext-starter
+# 钥密 · 自托管密码管理器
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+钥密支持密码生成、加密记录、设备管理、SMTP 邮箱验证和加密备份，是一套完全独立运行在 Linux VPS 上的自托管服务。
 
-## Prerequisites
+## VPS 一键安装
 
-- Node.js `>=22.13.0`
+支持 64 位 Ubuntu 22.04/24.04/26.04 和 Debian 12/13。脚本会通过 Docker 官方软件源安装 Docker Engine 与 Compose，下载项目、构建容器并启动 Caddy 反向代理。
 
-## Quick Start
+### 有域名（推荐，自动 HTTPS）
+
+先把域名 A/AAAA 记录指向 VPS，然后执行：
 
 ```bash
-npm install
+curl -fsSL https://raw.githubusercontent.com/WXD2233/yuemi-vault/main/install-vps.sh -o install-vps.sh
+sudo bash install-vps.sh vault.example.com
+```
+
+安装后访问 `https://vault.example.com`。Caddy 会自动申请并续期 HTTPS 证书。
+
+### 没有域名（使用 VPS IP）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WXD2233/yuemi-vault/main/install-vps.sh -o install-vps.sh
+sudo bash install-vps.sh
+```
+
+安装后访问 `http://VPS-IP`。还需要在云厂商安全组或 VPS 防火墙中放行 TCP 80；使用域名时同时放行 TCP/UDP 443。
+
+> 私有仓库无法匿名下载脚本。可先使用有权限的账号克隆仓库，再在仓库目录执行 `sudo bash install-vps.sh [域名]`。
+
+## 首次登录
+
+- 默认主密码：`12345678`
+- 首次登录后必须立即修改主密码；未完成修改就关闭或刷新页面，下次仍按首次进入处理
+- 演示固定验证码：`246810`
+
+正式使用前务必修改默认主密码，并配置真实通知邮箱和 SMTP。
+
+## VPS 架构与数据
+
+- 应用：Node.js 24 + Vinext
+- 数据库：VPS 本地 SQLite（WAL 模式）
+- 入口：Caddy 2，域名模式自动提供 HTTPS
+- 持久化：Docker 卷 `yuemi-vault_vault_data`
+- SMTP：使用 Node TLS/STARTTLS，可连接任意配置正确的邮箱服务商
+
+密码记录仍由应用使用主密码派生的密钥加密；SQLite 文件、SMTP 配置及其他服务数据均保存在 VPS 数据卷中。只启动一个应用副本，不要对同一个 SQLite 数据卷横向扩容。
+
+### 常用管理命令
+
+```bash
+cd /opt/yuemi-vault
+sudo docker compose ps
+sudo docker compose logs -f app
+sudo docker compose up -d --build
+sudo docker compose restart
+sudo docker compose down
+```
+
+`docker compose down` 不会删除密码数据。不要运行 `docker compose down -v`，因为 `-v` 会删除数据卷。
+
+## 手动部署 VPS 版
+
+```bash
+git clone https://github.com/WXD2233/yuemi-vault.git
+cd yuemi-vault
+printf 'SITE_ADDRESS=:80\nHTTP_PORT=80\nHTTPS_PORT=443\n' > .env
+docker compose up -d --build
+```
+
+使用域名时，把 `.env` 中的 `SITE_ADDRESS=:80` 改成自己的域名。
+
+## 本地开发
+
+需要 Node.js `22.13.0` 或更高版本：
+
+```bash
+npm ci
 npm run dev
+```
+
+项目只有 Node/VPS 构建，不包含任何 Cloudflare 或 Sites 部署配置：
+
+```bash
 npm run build
+npm run start
 ```
 
-This starter does not use `wrangler.jsonc`.
+默认 VPS 数据目录为项目下的 `data/`，可通过 `YUEMI_DATA_DIR` 或 `YUEMI_DATABASE_PATH` 修改。
 
-## Included Shape
+## 主要功能
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+- 生成 2–30 位密码，可组合数字、大小写字母和特殊符号
+- 保存、查看、修改、搜索和自定义分类
+- 所有设备每次进入时由服务端重新校验
+- 可选的新设备邮箱二次验证
+- 可配置错误次数和锁定时间，并管理已加入设备
+- 支持任意正确配置的 SMTP 服务
+- 导入 Chrome/Edge 密码 CSV
+- 导入和导出 AES-GCM 加密密码备份
+- 多主题和手机屏幕自适应
 
-## Workspace Auth Headers
+## 安全提示
 
-OpenAI workspace sites can read the current user's email from
-`oai-authenticated-user-email`.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
-```
-
-## Optional Dispatch-Owned ChatGPT Sign-In
-
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+- 不要把真实密码、SMTP 授权码、`.env` 或数据库文件提交到 GitHub
+- Chrome/Edge 导出的 CSV 是明文文件，导入完成后应及时安全删除
+- 定期使用应用中的“导出加密备份”功能，并把备份保存到另一台设备
+- VPS 应及时安装系统和 Docker 安全更新，只开放 SSH、80 和 443 等必要端口
+- 修改主密码会重新加密密码记录，并使所有已有会话失效
