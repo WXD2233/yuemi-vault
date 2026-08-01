@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { env } from "@/runtime/database";
 import { createVaultSession, hashSecret } from "../../../../db/auth";
 import { ensureVaultSchema } from "../../../../db/ensure";
 

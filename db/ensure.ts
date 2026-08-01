@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { env, type SqlitePreparedStatement } from "@/runtime/database";
 import {
   DEFAULT_MASTER_PASSWORD_HASH,
   LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
@@ -11,7 +11,7 @@ const LEGACY_MASTER_PASSWORD_HASH =
 
 export async function ensureVaultSchema() {
   if (!env.DB) {
-    throw new Error("Cloudflare D1 binding `DB` is unavailable.");
+    throw new Error("The local SQLite database is unavailable.");
   }
 
   await env.DB.batch([
@@ -208,7 +208,7 @@ export async function ensureVaultSchema() {
     "SELECT COUNT(*) AS total FROM security_settings",
   ).first<{ total: number }>();
 
-  const seedStatements: D1PreparedStatement[] = [];
+  const seedStatements: SqlitePreparedStatement[] = [];
 
   if (!entryCount?.total) {
     seedStatements.push(
