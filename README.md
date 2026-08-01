@@ -1,6 +1,6 @@
 # 钥密 · 自托管密码管理器
 
-钥密支持密码生成、加密记录、设备管理、SMTP 邮箱验证和加密备份。项目既可继续部署到 Cloudflare/Sites，也可作为完全独立的服务运行在自己的 Linux VPS 上。
+钥密支持密码生成、加密记录、设备管理、SMTP 邮箱验证和加密备份，是一套完全独立运行在 Linux VPS 上的自托管服务。
 
 ## VPS 一键安装
 
@@ -79,17 +79,9 @@ npm ci
 npm run dev
 ```
 
-默认构建仍使用 Cloudflare D1。VPS 构建需设置 `YUEMI_RUNTIME=vps`：
+项目只有 Node/VPS 构建，不包含任何 Cloudflare 或 Sites 部署配置：
 
 ```bash
-YUEMI_RUNTIME=vps npm run build
-YUEMI_RUNTIME=vps npm run start
-```
-
-Windows PowerShell 可使用：
-
-```powershell
-$env:YUEMI_RUNTIME = "vps"
 npm run build
 npm run start
 ```

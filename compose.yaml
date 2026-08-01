@@ -9,7 +9,6 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
-      YUEMI_RUNTIME: vps
       YUEMI_DATA_DIR: /data
       HOSTNAME: 0.0.0.0
       PORT: 3000

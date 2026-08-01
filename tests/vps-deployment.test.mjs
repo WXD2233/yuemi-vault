@@ -25,28 +25,28 @@ test("ships an independent VPS deployment", async () => {
   assert.match(caddyfile, /reverse_proxy app:3000/);
   assert.match(readme, /VPS 一键安装/);
   assert.match(readme, /12345678/);
-  assert.match(packageJson, /start:vps/);
+  assert.match(packageJson, /"start": "vinext start"/);
+  assert.doesNotMatch(packageJson, /start:vps|build:vps/);
 });
 
-test("VPS mode replaces Cloudflare bindings with local adapters", async () => {
-  const [viteConfig, workersAdapter, socketsAdapter] = await Promise.all([
+test("uses only local SQLite and Node socket adapters", async () => {
+  const [viteConfig, databaseAdapter, socketsAdapter] = await Promise.all([
     readFile(new URL("../vite.config.ts", import.meta.url), "utf8"),
     readFile(
-      new URL("../runtime/vps/cloudflare-workers.ts", import.meta.url),
+      new URL("../runtime/database.ts", import.meta.url),
       "utf8",
     ),
     readFile(
-      new URL("../runtime/vps/cloudflare-sockets.ts", import.meta.url),
+      new URL("../runtime/sockets.ts", import.meta.url),
       "utf8",
     ),
   ]);
 
-  assert.match(viteConfig, /YUEMI_RUNTIME === "vps"/);
-  assert.match(viteConfig, /cloudflare-workers\.ts/);
-  assert.match(viteConfig, /cloudflare-sockets\.ts/);
-  assert.match(workersAdapter, /DatabaseSync/);
-  assert.match(workersAdapter, /PRAGMA journal_mode=WAL/);
-  assert.match(workersAdapter, /BEGIN IMMEDIATE/);
+  assert.match(viteConfig, /plugins: \[vinext\(\)\]/);
+  assert.doesNotMatch(viteConfig, /cloudflare|sites\(/i);
+  assert.match(databaseAdapter, /DatabaseSync/);
+  assert.match(databaseAdapter, /PRAGMA journal_mode=WAL/);
+  assert.match(databaseAdapter, /BEGIN IMMEDIATE/);
   assert.match(socketsAdapter, /tls\.connect/);
   assert.match(socketsAdapter, /startTls\(\)/);
 });

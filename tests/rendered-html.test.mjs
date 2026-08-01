@@ -152,7 +152,7 @@ test("supports encrypted custom SMTP settings with optional presets", async () =
   assert.match(smtpConfig, /normalizeSmtpHost/);
   assert.doesNotMatch(smtpConfig, /endsWith\("@qq\.com"\)/);
   assert.doesNotMatch(smtpConfig, /endsWith\("@163\.com"\)/);
-  assert.match(smtpClient, /cloudflare:sockets/);
+  assert.match(smtpClient, /@\/runtime\/sockets/);
   assert.match(smtpClient, /AUTH LOGIN/);
   assert.match(smtpClient, /AUTH PLAIN/);
   assert.match(

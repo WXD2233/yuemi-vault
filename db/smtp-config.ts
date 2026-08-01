@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { env } from "@/runtime/database";
 
 export type SmtpSecurity = "tls" | "starttls";
 

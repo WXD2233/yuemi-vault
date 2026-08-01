@@ -7,8 +7,9 @@ import {
 } from "node:sqlite";
 
 type Row = Record<string, unknown>;
+type QueryMethod = "run" | "all" | "values" | "get";
 
-type D1LikeResult<T = Row> = {
+type SqliteResult<T = Row> = {
   success: true;
   results: T[];
   meta: {
@@ -34,7 +35,7 @@ function result<T>(
   results: T[] = [],
   changes = 0,
   lastRowId = 0,
-): D1LikeResult<T> {
+): SqliteResult<T> {
   return {
     success: true,
     results,
@@ -46,7 +47,7 @@ function result<T>(
   };
 }
 
-class VpsD1PreparedStatement {
+export class SqlitePreparedStatement {
   private parameters: SQLInputValue[] = [];
 
   constructor(
@@ -55,7 +56,7 @@ class VpsD1PreparedStatement {
   ) {}
 
   bind(...values: unknown[]) {
-    const statement = new VpsD1PreparedStatement(this.database, this.sql);
+    const statement = new SqlitePreparedStatement(this.database, this.sql);
     statement.parameters = values.map(normalizeValue);
     return statement;
   }
@@ -66,7 +67,7 @@ class VpsD1PreparedStatement {
     return statement;
   }
 
-  async run(): Promise<D1LikeResult> {
+  async run(): Promise<SqliteResult> {
     const startedAt = performance.now();
     const info = this.prepare().run(...this.parameters);
     return result(
@@ -77,7 +78,7 @@ class VpsD1PreparedStatement {
     );
   }
 
-  async all<T = Row>(): Promise<D1LikeResult<T>> {
+  async all<T = Row>(): Promise<SqliteResult<T>> {
     const startedAt = performance.now();
     const rows = this.prepare().all(...this.parameters) as T[];
     return result(startedAt, rows);
@@ -94,14 +95,30 @@ class VpsD1PreparedStatement {
   }
 }
 
-class VpsD1Database {
+export class SqliteDatabase {
   constructor(private database: DatabaseSync) {}
 
   prepare(sql: string) {
-    return new VpsD1PreparedStatement(this.database, sql);
+    return new SqlitePreparedStatement(this.database, sql);
   }
 
-  async batch(statements: VpsD1PreparedStatement[]) {
+  async query(sql: string, parameters: unknown[], method: QueryMethod) {
+    const statement = this.database.prepare(sql);
+    const values = parameters.map(normalizeValue);
+
+    if (method === "run") {
+      statement.run(...values);
+      return { rows: [] };
+    }
+
+    statement.setReturnArrays(true);
+    if (method === "get") {
+      return { rows: statement.get(...values) ?? [] };
+    }
+    return { rows: statement.all(...values) };
+  }
+
+  async batch(statements: SqlitePreparedStatement[]) {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const output = [];
@@ -138,15 +155,15 @@ function createDatabase() {
     enableForeignKeyConstraints: true,
   });
   database.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
-  return new VpsD1Database(database);
+  return new SqliteDatabase(database);
 }
 
 const globalDatabase = globalThis as typeof globalThis & {
-  __yuemiVpsDatabase?: VpsD1Database;
+  __yuemiDatabase?: SqliteDatabase;
 };
 
-globalDatabase.__yuemiVpsDatabase ??= createDatabase();
+globalDatabase.__yuemiDatabase ??= createDatabase();
 
 export const env = {
-  DB: globalDatabase.__yuemiVpsDatabase,
+  DB: globalDatabase.__yuemiDatabase,
 };
