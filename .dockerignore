@@ -1,0 +1,15 @@
+.git
+.github
+.next
+.vinext
+.wrangler
+data
+dist
+node_modules
+outputs
+work
+.env*
+*.log
+install.cmd
+install.ps1
+start.cmd

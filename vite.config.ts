@@ -1,4 +1,5 @@
 import vinext from "vinext";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json";
 import { sites } from "./build/sites-vite-plugin";
@@ -34,26 +35,39 @@ const localBindingConfig = {
 };
 
 export default defineConfig(async () => {
+  const isVpsRuntime = process.env.YUEMI_RUNTIME === "vps";
+
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
   process.env.WRANGLER_LOG_PATH ??= ".wrangler/logs";
   process.env.MINIFLARE_REGISTRY_PATH ??= ".wrangler/registry";
 
-  // Wrangler snapshots its log path while the Cloudflare plugin is imported.
-  const { cloudflare } = await import("@cloudflare/vite-plugin");
+  // The VPS build uses Node-native SQLite and sockets. Cloudflare remains the
+  // default so the existing Sites deployment keeps its D1 binding unchanged.
+  const cloudflarePlugin = isVpsRuntime
+    ? null
+    : (await import("@cloudflare/vite-plugin")).cloudflare({
+        viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
+        config: localBindingConfig,
+      });
 
   return {
+    resolve: isVpsRuntime
+      ? {
+          alias: {
+            "cloudflare:workers": fileURLToPath(
+              new URL("./runtime/vps/cloudflare-workers.ts", import.meta.url),
+            ),
+            "cloudflare:sockets": fileURLToPath(
+              new URL("./runtime/vps/cloudflare-sockets.ts", import.meta.url),
+            ),
+          },
+        }
+      : undefined,
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
-    plugins: [
-      vinext(),
-      sites(),
-      cloudflare({
-        viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
-        config: localBindingConfig,
-      }),
-    ],
+    plugins: [vinext(), ...(isVpsRuntime ? [] : [sites(), cloudflarePlugin!])],
   };
 });

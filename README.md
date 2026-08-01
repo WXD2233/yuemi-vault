@@ -1,97 +1,117 @@
-# 钥密 · 安全密码管理器
+# 钥密 · 自托管密码管理器
 
-钥密是一套支持密码生成、加密记录、设备管理、邮箱验证与加密备份的密码管理器。项目使用 Vinext、React、Cloudflare D1 和 AES-GCM 构建。
+钥密支持密码生成、加密记录、设备管理、SMTP 邮箱验证和加密备份。项目既可继续部署到 Cloudflare/Sites，也可作为完全独立的服务运行在自己的 Linux VPS 上。
 
-线上版本：[打开钥密](https://yuemi-vault-2026.workspace-387364.chatgpt.site)
+## VPS 一键安装
 
-## 主要功能
+支持 64 位 Ubuntu 22.04/24.04/26.04 和 Debian 12/13。脚本会通过 Docker 官方软件源安装 Docker Engine 与 Compose，下载项目、构建容器并启动 Caddy 反向代理。
 
-- 生成 2–30 位密码，可组合数字、大小写字母和特殊符号
-- 保存、查看、修改和搜索密码记录
-- 自定义密码分类与推荐分类
-- 所有设备每次进入都由服务端重新校验
-- 新设备邮箱二次验证，可在设置中关闭
-- 可配置密码错误次数和锁定时间
-- 管理并删除已加入的设备
-- 支持任意正确配置的 SMTP 邮箱服务
-- 导入 Chrome、Edge 导出的密码 CSV
-- 导出和恢复 AES-GCM 加密密码备份
-- 深色、浅色、紫罗兰、冰川和琥珀主题
-- 桌面端与手机端自适应
+### 有域名（推荐，自动 HTTPS）
 
-## Windows 一键安装
+先把域名 A/AAAA 记录指向 VPS，然后执行：
 
-### 方法一：双击安装
-
-1. 在 GitHub 页面点击 **Code → Download ZIP**。
-2. 完整解压 ZIP 文件。
-3. 双击 `install.cmd`。
-4. 安装完成后双击 `start.cmd`。
-5. 在浏览器打开启动窗口中显示的 `Local` 地址。
-
-安装脚本会自动完成：
-
-- 检查 Node.js `22.13.0` 或更高版本
-- 缺少 Node.js 时通过 Windows `winget` 安装 Node.js LTS
-- 安装锁定版本的项目依赖
-- 执行完整生产构建
-
-### 方法二：使用 Git
-
-```powershell
-git clone https://github.com/WXD2233/yuemi-vault.git
-cd yuemi-vault
-.\install.cmd
+```bash
+curl -fsSL https://raw.githubusercontent.com/WXD2233/yuemi-vault/main/install-vps.sh -o install-vps.sh
+sudo bash install-vps.sh vault.example.com
 ```
 
-完成后运行：
+安装后访问 `https://vault.example.com`。Caddy 会自动申请并续期 HTTPS 证书。
 
-```powershell
-.\start.cmd
+### 没有域名（使用 VPS IP）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WXD2233/yuemi-vault/main/install-vps.sh -o install-vps.sh
+sudo bash install-vps.sh
 ```
+
+安装后访问 `http://VPS-IP`。还需要在云厂商安全组或 VPS 防火墙中放行 TCP 80；使用域名时同时放行 TCP/UDP 443。
+
+> 私有仓库无法匿名下载脚本。可先使用有权限的账号克隆仓库，再在仓库目录执行 `sudo bash install-vps.sh [域名]`。
 
 ## 首次登录
 
 - 默认主密码：`12345678`
-- 首次进入后必须立即设置新的主密码
-- 未完成修改就刷新、关闭或重新打开时，需要从首次登录重新开始
+- 首次登录后必须立即修改主密码；未完成修改就关闭或刷新页面，下次仍按首次进入处理
 - 演示固定验证码：`246810`
 
-新主密码需要 10–128 位，并至少包含大写字母、小写字母、数字和符号中的三类。
+正式使用前务必修改默认主密码，并配置真实通知邮箱和 SMTP。
 
-## 手动安装
+## VPS 架构与数据
 
-需要 Node.js `22.13.0` 或更高版本。
+- 应用：Node.js 24 + Vinext
+- 数据库：VPS 本地 SQLite（WAL 模式）
+- 入口：Caddy 2，域名模式自动提供 HTTPS
+- 持久化：Docker 卷 `yuemi-vault_vault_data`
+- SMTP：使用 Node TLS/STARTTLS，可连接任意配置正确的邮箱服务商
+
+密码记录仍由应用使用主密码派生的密钥加密；SQLite 文件、SMTP 配置及其他服务数据均保存在 VPS 数据卷中。只启动一个应用副本，不要对同一个 SQLite 数据卷横向扩容。
+
+### 常用管理命令
+
+```bash
+cd /opt/yuemi-vault
+sudo docker compose ps
+sudo docker compose logs -f app
+sudo docker compose up -d --build
+sudo docker compose restart
+sudo docker compose down
+```
+
+`docker compose down` 不会删除密码数据。不要运行 `docker compose down -v`，因为 `-v` 会删除数据卷。
+
+## 手动部署 VPS 版
+
+```bash
+git clone https://github.com/WXD2233/yuemi-vault.git
+cd yuemi-vault
+printf 'SITE_ADDRESS=:80\nHTTP_PORT=80\nHTTPS_PORT=443\n' > .env
+docker compose up -d --build
+```
+
+使用域名时，把 `.env` 中的 `SITE_ADDRESS=:80` 改成自己的域名。
+
+## 本地开发
+
+需要 Node.js `22.13.0` 或更高版本：
 
 ```bash
 npm ci
-npm run build
 npm run dev
 ```
 
-## 常用命令
+默认构建仍使用 Cloudflare D1。VPS 构建需设置 `YUEMI_RUNTIME=vps`：
 
 ```bash
-npm run dev          # 启动本地开发服务器
-npm run build        # 创建生产构建
-npm test             # 构建并运行测试
-npm run lint         # 代码检查
-npm run db:generate  # 生成 D1 数据库迁移
+YUEMI_RUNTIME=vps npm run build
+YUEMI_RUNTIME=vps npm run start
 ```
+
+Windows PowerShell 可使用：
+
+```powershell
+$env:YUEMI_RUNTIME = "vps"
+npm run build
+npm run start
+```
+
+默认 VPS 数据目录为项目下的 `data/`，可通过 `YUEMI_DATA_DIR` 或 `YUEMI_DATABASE_PATH` 修改。
+
+## 主要功能
+
+- 生成 2–30 位密码，可组合数字、大小写字母和特殊符号
+- 保存、查看、修改、搜索和自定义分类
+- 所有设备每次进入时由服务端重新校验
+- 可选的新设备邮箱二次验证
+- 可配置错误次数和锁定时间，并管理已加入设备
+- 支持任意正确配置的 SMTP 服务
+- 导入 Chrome/Edge 密码 CSV
+- 导入和导出 AES-GCM 加密密码备份
+- 多主题和手机屏幕自适应
 
 ## 安全提示
 
-- 不要把真实密码、SMTP 授权码或 `.env` 文件提交到 GitHub。
-- Chrome 和 Edge 导出的原始 CSV 是明文文件，导入完成后应及时删除。
-- 加密备份恢复时必须输入创建备份时使用的主密码。
-- 修改主密码会重新加密密码记录，并使所有已登录设备的会话失效。
-
-## 项目结构
-
-- `app/`：界面与 API 路由
-- `db/`：数据库、会话与加密配置
-- `drizzle/`：D1 数据库迁移
-- `tests/`：构建和功能检查
-- `install.cmd`：Windows 一键安装入口
-- `install.ps1`：安装检查与执行逻辑
-- `start.cmd`：Windows 本地启动入口
+- 不要把真实密码、SMTP 授权码、`.env` 或数据库文件提交到 GitHub
+- Chrome/Edge 导出的 CSV 是明文文件，导入完成后应及时安全删除
+- 定期使用应用中的“导出加密备份”功能，并把备份保存到另一台设备
+- VPS 应及时安装系统和 Docker 安全更新，只开放 SSH、80 和 443 等必要端口
+- 修改主密码会重新加密密码记录，并使所有已有会话失效
