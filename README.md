@@ -24,7 +24,9 @@ curl -fsSL https://raw.githubusercontent.com/WXD2233/yuemi-vault/main/install-vp
 sudo bash install-vps.sh
 ```
 
-安装后访问 `http://VPS-IP`。还需要在云厂商安全组或 VPS 防火墙中放行 TCP 80；使用域名时同时放行 TCP/UDP 443。
+安装后访问 `http://VPS-IP:51213`。默认不占用宿主机的 80 端口，需要在云厂商安全组或 VPS 防火墙中放行 TCP 51213；使用项目自带的域名自动 HTTPS 时还需要放行 TCP/UDP 443。
+
+如果 VPS 已有 Nginx、Caddy、Traefik、宝塔或 1Panel 管理 HTTPS，建议继续由现有服务负责证书，把域名反向代理到 `http://127.0.0.1:51213`，不要让两个服务同时占用 443 端口。
 
 > 私有仓库无法匿名下载脚本。可先使用有权限的账号克隆仓库，再在仓库目录执行 `sudo bash install-vps.sh [域名]`。
 
@@ -64,11 +66,11 @@ sudo docker compose down
 ```bash
 git clone https://github.com/WXD2233/yuemi-vault.git
 cd yuemi-vault
-printf 'SITE_ADDRESS=:80\nHTTP_PORT=80\nHTTPS_PORT=443\n' > .env
+printf 'SITE_ADDRESS=:80\nHTTP_PORT=51213\nHTTPS_PORT=443\n' > .env
 docker compose up -d --build
 ```
 
-使用域名时，把 `.env` 中的 `SITE_ADDRESS=:80` 改成自己的域名。
+`SITE_ADDRESS=:80` 是 Caddy 在容器内部监听的端口，宿主机对外使用 `51213`，因此不会占用 VPS 的 80 端口。使用域名时，把 `.env` 中的 `SITE_ADDRESS=:80` 改成自己的域名。
 
 ## 本地开发
 
@@ -105,5 +107,5 @@ npm run start
 - 不要把真实密码、SMTP 授权码、`.env` 或数据库文件提交到 GitHub
 - Chrome/Edge 导出的 CSV 是明文文件，导入完成后应及时安全删除
 - 定期使用应用中的“导出加密备份”功能，并把备份保存到另一台设备
-- VPS 应及时安装系统和 Docker 安全更新，只开放 SSH、80 和 443 等必要端口
+- VPS 应及时安装系统和 Docker 安全更新，只开放 SSH、51213 和 443 等实际需要的端口
 - 修改主密码会重新加密密码记录，并使所有已有会话失效

@@ -110,11 +110,13 @@ if [[ -f "${ENV_FILE}" ]]; then
   fi
 else
   umask 077
-  printf 'SITE_ADDRESS=%s\nHTTP_PORT=80\nHTTPS_PORT=443\n' \
+  printf 'SITE_ADDRESS=%s\nHTTP_PORT=51213\nHTTPS_PORT=443\n' \
     "${SITE_ADDRESS}" >"${ENV_FILE}"
 fi
 
 EFFECTIVE_SITE_ADDRESS="$(grep '^SITE_ADDRESS=' "${ENV_FILE}" | tail -n 1 | cut -d= -f2-)"
+EFFECTIVE_HTTP_PORT="$(grep '^HTTP_PORT=' "${ENV_FILE}" | tail -n 1 | cut -d= -f2- || true)"
+EFFECTIVE_HTTP_PORT="${EFFECTIVE_HTTP_PORT:-51213}"
 
 say "构建并启动钥密"
 docker compose --project-directory "${PROJECT_DIRECTORY}" \
@@ -142,11 +144,14 @@ fi
 
 if [[ "${EFFECTIVE_SITE_ADDRESS}" == :* ]]; then
   SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  ACCESS_URL="http://${SERVER_IP:-VPS-IP}"
+  ACCESS_URL="http://${SERVER_IP:-VPS-IP}:${EFFECTIVE_HTTP_PORT}"
+  FIREWALL_HINT="如外部无法访问，请在 VPS 防火墙/安全组放行 TCP ${EFFECTIVE_HTTP_PORT}。"
 elif [[ "${EFFECTIVE_SITE_ADDRESS}" == http://* || "${EFFECTIVE_SITE_ADDRESS}" == https://* ]]; then
   ACCESS_URL="${EFFECTIVE_SITE_ADDRESS}"
+  FIREWALL_HINT="域名模式需要确保 HTTPS 入口可访问；如已有反向代理，请将域名转发到 127.0.0.1:${EFFECTIVE_HTTP_PORT}。"
 else
   ACCESS_URL="https://${EFFECTIVE_SITE_ADDRESS}"
+  FIREWALL_HINT="自动 HTTPS 模式需要在 VPS 防火墙/安全组放行 TCP/UDP 443。"
 fi
 
 say "安装完成"
@@ -155,4 +160,4 @@ printf '%s\n' \
   "首次默认主密码：12345678" \
   "首次登录后必须立即修改主密码。" \
   "数据保存在 Docker 卷 yuemi-vault_vault_data 中。" \
-  "如外部无法访问，请在 VPS 防火墙/安全组放行 TCP 80、443。"
+  "${FIREWALL_HINT}"
