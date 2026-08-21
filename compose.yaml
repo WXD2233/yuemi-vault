@@ -12,10 +12,12 @@ services:
       YUEMI_DATA_DIR: /data
       HOSTNAME: 0.0.0.0
       PORT: 3000
+      YUEMI_INITIAL_PASSWORD: ${YUEMI_INITIAL_PASSWORD:?Set YUEMI_INITIAL_PASSWORD in .env}
+      SMTP_CONFIG_KEY: ${SMTP_CONFIG_KEY:?Set SMTP_CONFIG_KEY in .env}
     volumes:
       - vault_data:/data
-    expose:
-      - "3000"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-51213}:3000"
     healthcheck:
       test:
         [
@@ -37,6 +39,8 @@ services:
 
   caddy:
     image: caddy:2.10-alpine
+    profiles:
+      - standalone-https
     restart: unless-stopped
     depends_on:
       app:
@@ -44,9 +48,9 @@ services:
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:?Set SITE_ADDRESS in .env}
     ports:
-      - "${HTTP_PORT:-51213}:80"
-      - "${HTTPS_PORT:-443}:443"
-      - "${HTTPS_PORT:-443}:443/udp"
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

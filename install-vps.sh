@@ -33,7 +33,7 @@ esac
 install_docker() {
   say "安装 Docker Engine 与 Compose 插件"
   apt-get update
-  apt-get install -y ca-certificates curl git
+  apt-get install -y ca-certificates curl git openssl
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL "https://download.docker.com/linux/${ID}/gpg" \
     -o /etc/apt/keyrings/docker.asc
@@ -69,6 +69,10 @@ else
     apt-get update
     apt-get install -y git
   }
+  command -v openssl >/dev/null 2>&1 || {
+    apt-get update
+    apt-get install -y openssl
+  }
 fi
 
 SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
@@ -103,6 +107,11 @@ else
 fi
 
 ENV_FILE="${PROJECT_DIRECTORY}/.env"
+GENERATED_INITIAL_PASSWORD=""
+generate_hex_secret() {
+  openssl rand -hex "${1}"
+}
+
 if [[ -f "${ENV_FILE}" ]]; then
   say "保留现有 .env 配置"
   if ! grep -q '^SITE_ADDRESS=' "${ENV_FILE}"; then
@@ -110,17 +119,37 @@ if [[ -f "${ENV_FILE}" ]]; then
   fi
 else
   umask 077
-  printf 'SITE_ADDRESS=%s\nHTTP_PORT=51213\nHTTPS_PORT=443\n' \
+  printf 'SITE_ADDRESS=%s\nBIND_ADDRESS=127.0.0.1\nHTTP_PORT=51213\n' \
     "${SITE_ADDRESS}" >"${ENV_FILE}"
 fi
+
+if ! grep -q '^BIND_ADDRESS=' "${ENV_FILE}"; then
+  printf 'BIND_ADDRESS=127.0.0.1\n' >>"${ENV_FILE}"
+fi
+if ! grep -q '^HTTP_PORT=' "${ENV_FILE}"; then
+  printf 'HTTP_PORT=51213\n' >>"${ENV_FILE}"
+fi
+if ! grep -q '^SMTP_CONFIG_KEY=' "${ENV_FILE}"; then
+  printf 'SMTP_CONFIG_KEY=%s\n' "$(generate_hex_secret 32)" >>"${ENV_FILE}"
+fi
+if ! grep -q '^YUEMI_INITIAL_PASSWORD=' "${ENV_FILE}"; then
+  GENERATED_INITIAL_PASSWORD="$(generate_hex_secret 12)"
+  printf 'YUEMI_INITIAL_PASSWORD=%s\n' "${GENERATED_INITIAL_PASSWORD}" >>"${ENV_FILE}"
+fi
+chmod 600 "${ENV_FILE}"
 
 EFFECTIVE_SITE_ADDRESS="$(grep '^SITE_ADDRESS=' "${ENV_FILE}" | tail -n 1 | cut -d= -f2-)"
 EFFECTIVE_HTTP_PORT="$(grep '^HTTP_PORT=' "${ENV_FILE}" | tail -n 1 | cut -d= -f2- || true)"
 EFFECTIVE_HTTP_PORT="${EFFECTIVE_HTTP_PORT:-51213}"
 
 say "构建并启动钥密"
+COMPOSE_PROFILE_ARGS=()
+if [[ -n "${DOMAIN}" ]]; then
+  COMPOSE_PROFILE_ARGS=(--profile standalone-https)
+fi
 docker compose --project-directory "${PROJECT_DIRECTORY}" \
-  -f "${PROJECT_DIRECTORY}/compose.yaml" up -d --build --remove-orphans
+  -f "${PROJECT_DIRECTORY}/compose.yaml" "${COMPOSE_PROFILE_ARGS[@]}" \
+  up -d --build --remove-orphans
 
 APP_CONTAINER_ID="$(
   docker compose --project-directory "${PROJECT_DIRECTORY}" \
@@ -143,9 +172,8 @@ if [[ "${STATUS}" != "healthy" ]]; then
 fi
 
 if [[ "${EFFECTIVE_SITE_ADDRESS}" == :* ]]; then
-  SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  ACCESS_URL="http://${SERVER_IP:-VPS-IP}:${EFFECTIVE_HTTP_PORT}"
-  FIREWALL_HINT="如外部无法访问，请在 VPS 防火墙/安全组放行 TCP ${EFFECTIVE_HTTP_PORT}。"
+  ACCESS_URL="http://127.0.0.1:${EFFECTIVE_HTTP_PORT}"
+  FIREWALL_HINT="服务默认只监听本机。请让现有 HTTPS 反向代理转发到 127.0.0.1:${EFFECTIVE_HTTP_PORT}，不要把该端口直接暴露到公网。"
 elif [[ "${EFFECTIVE_SITE_ADDRESS}" == http://* || "${EFFECTIVE_SITE_ADDRESS}" == https://* ]]; then
   ACCESS_URL="${EFFECTIVE_SITE_ADDRESS}"
   FIREWALL_HINT="域名模式需要确保 HTTPS 入口可访问；如已有反向代理，请将域名转发到 127.0.0.1:${EFFECTIVE_HTTP_PORT}。"
@@ -157,7 +185,11 @@ fi
 say "安装完成"
 printf '%s\n' \
   "访问地址：${ACCESS_URL}" \
-  "首次默认主密码：12345678" \
   "首次登录后必须立即修改主密码。" \
   "数据保存在 Docker 卷 yuemi-vault_vault_data 中。" \
   "${FIREWALL_HINT}"
+if [[ -n "${GENERATED_INITIAL_PASSWORD}" ]]; then
+  printf '%s\n' \
+    "首次初始主密码：${GENERATED_INITIAL_PASSWORD}" \
+    "该密码只在本次安装时显示，请立即保存并在首次登录后修改。"
+fi

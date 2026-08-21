@@ -16,6 +16,7 @@ export const vaultEntries = sqliteTable("vault_entries", {
 
 export const trustedDevices = sqliteTable("trusted_devices", {
   id: text("id").primaryKey(),
+  credentialHash: text("credential_hash").notNull().default(""),
   deviceName: text("device_name").notNull(),
   browser: text("browser").notNull(),
   location: text("location").notNull(),
@@ -32,6 +33,17 @@ export const securitySettings = sqliteTable("security_settings", {
   masterPasswordHash: text("master_password_hash")
     .notNull()
     .default(DEFAULT_MASTER_PASSWORD_HASH),
+  masterPasswordSalt: text("master_password_salt")
+    .notNull()
+    .default("yuemi-master-v1"),
+  masterPasswordIterations: integer("master_password_iterations")
+    .notNull()
+    .default(100000),
+  requiresPasswordChange: integer("requires_password_change", {
+    mode: "boolean",
+  })
+    .notNull()
+    .default(true),
   maxFailedAttempts: integer("max_failed_attempts").notNull().default(5),
   lockoutMinutes: integer("lockout_minutes").notNull().default(15),
   smtpProvider: text("smtp_provider").notNull().default(""),
@@ -49,6 +61,10 @@ export const securitySettings = sqliteTable("security_settings", {
     .notNull()
     .default(false),
   smtpVerifiedAt: text("smtp_verified_at"),
+  recoveryCipher: text("recovery_cipher").notNull().default(""),
+  recoveryIv: text("recovery_iv").notNull().default(""),
+  recoverySalt: text("recovery_salt").notNull().default(""),
+  recoveryIterations: integer("recovery_iterations").notNull().default(600000),
 });
 
 export const loginAttempts = sqliteTable("login_attempts", {
@@ -68,6 +84,9 @@ export const vaultSessions = sqliteTable("vault_sessions", {
 export const verificationChallenges = sqliteTable("verification_challenges", {
   tokenHash: text("token_hash").primaryKey(),
   deviceId: text("device_id").notNull(),
+  purpose: text("purpose").notNull().default("device"),
+  codeHash: text("code_hash").notNull().default(""),
+  failedCount: integer("failed_count").notNull().default(0),
   expiresAt: text("expires_at").notNull(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });

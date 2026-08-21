@@ -727,6 +727,16 @@ textarea {
   box-shadow: 0 0 13px var(--green);
 }
 
+.status-pill.insecure {
+  color: #ff9f7b;
+  border-color: rgba(255, 126, 90, 0.35);
+}
+
+.status-pill.insecure i {
+  background: #ff7e5a;
+  box-shadow: 0 0 13px rgba(255, 126, 90, 0.7);
+}
+
 .avatar {
   width: 40px;
   height: 40px;
@@ -1709,6 +1719,49 @@ textarea {
 
 .recovery-email-form .primary-button {
   min-width: 116px;
+}
+
+.recovery-key-settings {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.recovery-key-settings > div,
+.recovery-key-output {
+  display: grid;
+  gap: 5px;
+}
+
+.recovery-key-settings span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.recovery-key-output {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid rgba(47, 212, 157, 0.34);
+  border-radius: 13px;
+  background: var(--green-soft);
+}
+
+.recovery-key-output code {
+  overflow-wrap: anywhere;
+  color: var(--green-bright);
+  font-size: 13px;
+}
+
+.recovery-key-output > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .password-change-form {
@@ -2705,6 +2758,11 @@ textarea {
 
   .recovery-email-form > div {
     grid-template-columns: 1fr;
+  }
+
+  .recovery-key-settings {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .device-card {

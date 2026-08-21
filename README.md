@@ -1,54 +1,79 @@
 # 钥密 · 自托管密码管理器
 
-钥密支持密码生成、加密记录、设备管理、SMTP 邮箱验证和加密备份，是一套完全独立运行在 Linux VPS 上的自托管服务。
+钥密是一套独立运行在 Linux VPS 上的中文密码管理器，支持密码生成、完整记录加密、设备管理、邮箱二次验证、离线恢复密钥，以及 Chrome / Edge 密码导入和加密备份。
+
+项目只包含 Node.js、SQLite 与 Docker/VPS 部署，不包含 Cloudflare 或 Sites 配置。
 
 ## VPS 一键安装
 
-支持 64 位 Ubuntu 22.04/24.04/26.04 和 Debian 12/13。脚本会通过 Docker 官方软件源安装 Docker Engine 与 Compose，下载项目、构建容器并启动 Caddy 反向代理。
+支持 64 位 Ubuntu 22.04/24.04/26.04 和 Debian 12/13。安装脚本会从 Docker 官方软件源安装 Docker Engine 与 Compose、下载项目、生成每台服务器独有的安全密钥、构建容器并启动服务。
 
-### 有域名（推荐，自动 HTTPS）
+### VPS 已有 HTTPS 服务（推荐）
 
-先把域名 A/AAAA 记录指向 VPS，然后执行：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/WXD2233/yuemi-vault/main/install-vps.sh -o install-vps.sh
-sudo bash install-vps.sh vault.example.com
-```
-
-安装后访问 `https://vault.example.com`。Caddy 会自动申请并续期 HTTPS 证书。
-
-### 没有域名（使用 VPS IP）
+如果服务器已有 Nginx、Caddy、Traefik、宝塔或 1Panel，请不要向脚本传域名：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/WXD2233/yuemi-vault/main/install-vps.sh -o install-vps.sh
 sudo bash install-vps.sh
 ```
 
-安装后访问 `http://VPS-IP:51213`。默认不占用宿主机的 80 端口，需要在云厂商安全组或 VPS 防火墙中放行 TCP 51213；使用项目自带的域名自动 HTTPS 时还需要放行 TCP/UDP 443。
+钥密默认只监听 `127.0.0.1:51213`，不会占用公网 80/443，也不需要放行 51213。让现有 HTTPS 服务把独立域名反向代理到：
 
-如果 VPS 已有 Nginx、Caddy、Traefik、宝塔或 1Panel 管理 HTTPS，建议继续由现有服务负责证书，把域名反向代理到 `http://127.0.0.1:51213`，不要让两个服务同时占用 443 端口。
+```text
+http://127.0.0.1:51213
+```
 
-> 私有仓库无法匿名下载脚本。可先使用有权限的账号克隆仓库，再在仓库目录执行 `sudo bash install-vps.sh [域名]`。
+Nginx 示例（证书部分继续使用你现有的配置）：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:51213;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    client_max_body_size 25m;
+}
+```
+
+必须通过 HTTPS 域名访问。不要把主密码通过公网 HTTP 发送，也不要把 51213 端口直接开放到公网。
+
+### 独立 VPS、由钥密自动申请 HTTPS
+
+只有在 VPS 的 80/443 没有被其他服务占用时，才把域名传给脚本：
+
+```bash
+sudo bash install-vps.sh vault.example.com
+```
+
+先把域名 A/AAAA 记录指向 VPS，并放行 TCP 80、TCP/UDP 443。脚本会启用项目自带的 Caddy，自动申请并续期证书。若 80 或 443 已被占用，安装会发生端口冲突，此时请改用上一节的“已有 HTTPS 服务”方式。
 
 ## 首次登录
 
-- 默认主密码：`12345678`
-- 首次登录后必须立即修改主密码；未完成修改就关闭或刷新页面，下次仍按首次进入处理
-- 演示固定验证码：`246810`
+安装脚本会生成随机初始主密码，并只在安装完成时显示一次。请立即保存它：
 
-正式使用前务必修改默认主密码，并配置真实通知邮箱和 SMTP。
+1. 使用脚本显示的随机初始主密码登录。
+2. 首次进入必须设置新的主密码；未完成就关闭页面，下次仍按首次进入处理。
+3. 新主密码为 10–128 位，至少包含大写字母、小写字母、数字和符号中的三类。
+4. 设置通知邮箱与 SMTP，发送测试邮件后再开启新设备二次验证。
+5. 生成并下载离线恢复密钥，保存到另一台设备或离线介质。
 
-## VPS 架构与数据
+验证码每次随机生成、10 分钟有效且只能使用一次。服务器不会通过邮件发送或重置明文主密码；找回时必须同时通过邮箱验证码，并在浏览器本地使用离线恢复密钥解密。
+
+## 数据与加密
 
 - 应用：Node.js 24 + Vinext
-- 数据库：VPS 本地 SQLite（WAL 模式）
-- 入口：Caddy 2，域名模式自动提供 HTTPS
+- 数据库：本地 SQLite，WAL 模式
 - 持久化：Docker 卷 `yuemi-vault_vault_data`
-- SMTP：使用 Node TLS/STARTTLS，可连接任意配置正确的邮箱服务商
+- 记录加密：PBKDF2-SHA-256（新记录 600,000 次）+ AES-256-GCM
+- 主密码校验：每个数据库独立随机盐值，PBKDF2-SHA-256 600,000 次
+- SMTP 授权码：使用服务器 `.env` 中独立随机密钥进行 AES-GCM 加密
+- 备份：浏览器本地使用主密码加密，服务器只接收记录密文
 
-密码记录仍由应用使用主密码派生的密钥加密；SQLite 文件、SMTP 配置及其他服务数据均保存在 VPS 数据卷中。只启动一个应用副本，不要对同一个 SQLite 数据卷横向扩容。
+旧版记录和旧版主密码哈希可以继续读取；新建记录或修改主密码后会使用新的加密参数。只启动一个应用副本，不要让多个实例同时写入同一个 SQLite 数据卷。
 
-### 常用管理命令
+## 常用管理命令
 
 ```bash
 cd /opt/yuemi-vault
@@ -59,53 +84,73 @@ sudo docker compose restart
 sudo docker compose down
 ```
 
-`docker compose down` 不会删除密码数据。不要运行 `docker compose down -v`，因为 `-v` 会删除数据卷。
+使用项目自带自动 HTTPS 时，在 Compose 命令中加入：
 
-## 手动部署 VPS 版
+```bash
+sudo docker compose --profile standalone-https up -d --build
+```
+
+`docker compose down` 不会删除密码数据。不要执行 `docker compose down -v`，因为 `-v` 会永久删除密码数据库卷。
+
+## 手动部署
 
 ```bash
 git clone https://github.com/WXD2233/yuemi-vault.git
 cd yuemi-vault
-printf 'SITE_ADDRESS=:80\nHTTP_PORT=51213\nHTTPS_PORT=443\n' > .env
+openssl rand -hex 12
+openssl rand -hex 32
+```
+
+把两次输出分别填入以下文件，然后启动：
+
+```dotenv
+SITE_ADDRESS=:80
+BIND_ADDRESS=127.0.0.1
+HTTP_PORT=51213
+YUEMI_INITIAL_PASSWORD=第一条随机值
+SMTP_CONFIG_KEY=第二条随机值
+```
+
+```bash
+chmod 600 .env
 docker compose up -d --build
 ```
 
-`SITE_ADDRESS=:80` 是 Caddy 在容器内部监听的端口，宿主机对外使用 `51213`，因此不会占用 VPS 的 80 端口。使用域名时，把 `.env` 中的 `SITE_ADDRESS=:80` 改成自己的域名。
+生产环境缺少 `YUEMI_INITIAL_PASSWORD` 或 `SMTP_CONFIG_KEY` 时会拒绝启动，防止所有安装共用公开密码或无法安全保存 SMTP 授权码。
 
 ## 本地开发
 
-需要 Node.js `22.13.0` 或更高版本：
+需要 Node.js 22.13.0 或更高版本：
 
 ```bash
 npm ci
 npm run dev
+npm run lint
+npm test
+npm run security:audit
 ```
 
-项目只有 Node/VPS 构建，不包含任何 Cloudflare 或 Sites 部署配置：
-
-```bash
-npm run build
-npm run start
-```
-
-默认 VPS 数据目录为项目下的 `data/`，可通过 `YUEMI_DATA_DIR` 或 `YUEMI_DATABASE_PATH` 修改。
+本地非生产开发在未设置环境变量时可使用开发初始密码 `12345678`。该回退不会在 `NODE_ENV=production` 中启用。
 
 ## 主要功能
 
 - 生成 2–30 位密码，可组合数字、大小写字母和特殊符号
-- 保存、查看、修改、搜索和自定义分类
-- 所有设备每次进入时由服务端重新校验
-- 可选的新设备邮箱二次验证
-- 可配置错误次数和锁定时间，并管理已加入设备
-- 支持任意正确配置的 SMTP 服务
-- 导入 Chrome/Edge 密码 CSV
-- 导入和导出 AES-GCM 加密密码备份
+- 保存、查看、复制、修改和搜索密码记录，支持自定义分类
+- 账号、密码、备注和分类整体加密，服务器只保存密文
+- 每次进入都由服务端重新校验主密码
+- 可选的新设备随机邮箱验证码和不可伪造的设备凭证
+- 可配置错误次数、锁定时间和浏览器空闲自动锁定
+- 管理并删除已加入设备，删除后立即撤销该设备会话
+- 支持任意正确配置且解析到公网地址的 SMTP 服务
+- 导入 Chrome / Edge 明文 CSV，并在浏览器内加密后上传
+- 导入、导出 AES-GCM 加密密码备份
 - 多主题和手机屏幕自适应
 
 ## 安全提示
 
-- 不要把真实密码、SMTP 授权码、`.env` 或数据库文件提交到 GitHub
-- Chrome/Edge 导出的 CSV 是明文文件，导入完成后应及时安全删除
-- 定期使用应用中的“导出加密备份”功能，并把备份保存到另一台设备
-- VPS 应及时安装系统和 Docker 安全更新，只开放 SSH、51213 和 443 等实际需要的端口
-- 修改主密码会重新加密密码记录，并使所有已有会话失效
+- 不要提交 `.env`、数据库文件、SMTP 授权码、恢复密钥或真实密码到 GitHub。
+- Chrome / Edge 导出的 CSV 是明文，导入后应立即安全删除。
+- 恢复密钥不要和 VPS 数据库备份放在同一位置。
+- 定期导出加密备份，并在另一台设备验证可以解密。
+- 只开放 SSH 与现有 HTTPS 服务实际需要的端口。
+- 修改主密码会重新加密所有记录、清除恢复材料并撤销全部登录会话；重新登录后要生成新的恢复密钥。

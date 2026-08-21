@@ -1,24 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { headers } from "next/headers";
 import "./globals.css";
-
-const themeBootScript = `
-  try {
-    const saved = localStorage.getItem("yuemi-theme") || "system";
-    const themes = ["dark", "light", "violet", "glacier", "amber", "system"];
-    const preference = themes.includes(saved) ? saved : "system";
-    const resolved = preference === "system"
-      ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
-      : preference;
-    document.documentElement.dataset.theme = resolved;
-    document.documentElement.dataset.themePreference = preference;
-    document.documentElement.style.colorScheme =
-      resolved === "light" || resolved === "glacier" ? "light" : "dark";
-  } catch {
-    document.documentElement.dataset.theme = "dark";
-  }
-`;
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,34 +12,23 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export async function generateMetadata(): Promise<Metadata> {
-  const requestHeaders = await headers();
-  const host =
-    requestHeaders.get("x-forwarded-host") ??
-    requestHeaders.get("host") ??
-    "localhost:3000";
-  const protocol =
-    requestHeaders.get("x-forwarded-proto") ??
-    (host.startsWith("localhost") ? "http" : "https");
-  const ogImage = `${protocol}://${host}/og.png`;
-
-  return {
+export const metadata: Metadata = {
+  metadataBase: new URL("http://localhost:3000"),
+  title: "钥密 · 安全密码管理器",
+  description:
+    "生成高强度密码、加密保存账号，并通过主密码与新设备邮箱验证保护你的密码库。",
+  openGraph: {
     title: "钥密 · 安全密码管理器",
-    description:
-      "生成高强度密码、加密保存账号，并通过主密码与新设备邮箱验证保护你的密码库。",
-    openGraph: {
-      title: "钥密 · 安全密码管理器",
-      description: "主密码保护、邮箱二次验证与可信设备管理。",
-      images: [ogImage],
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: "钥密 · 安全密码管理器",
-      description: "主密码保护、邮箱二次验证与可信设备管理。",
-      images: [ogImage],
-    },
-  };
-}
+    description: "主密码保护、邮箱二次验证与可信设备管理。",
+    images: ["/og.png"],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "钥密 · 安全密码管理器",
+    description: "主密码保护、邮箱二次验证与可信设备管理。",
+    images: ["/og.png"],
+  },
+};
 
 export default function RootLayout({
   children,
@@ -67,7 +38,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" data-theme="dark" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
+        <script src="/theme-init.js" defer />
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
         {children}

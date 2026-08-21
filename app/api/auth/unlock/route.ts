@@ -1,17 +1,28 @@
 import { env } from "@/runtime/database";
 import {
-  createOpaqueToken,
   createVaultSession,
-  hashMasterPassword,
   hashSecret,
+  verifyMasterPassword,
 } from "../../../../db/auth";
+import { createCodeChallenge } from "../../../../db/challenges";
+import {
+  hasTrustedDeviceCredential,
+  registerTrustedDevice,
+  touchTrustedDevice,
+} from "../../../../db/devices";
 import { ensureVaultSchema } from "../../../../db/ensure";
-import { getReadySmtpConfig } from "../../../../db/smtp-config";
-import { sendSmtpMail } from "../../../../db/smtp";
+import {
+  clientAddress,
+  enforceRateLimit,
+  readJsonBody,
+  requestErrorResponse,
+} from "../../../../db/http-security";
 import {
   DEFAULT_MASTER_PASSWORD,
   LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
 } from "../../../../db/security-constants";
+import { getReadySmtpConfig } from "../../../../db/smtp-config";
+import { sendSmtpMail } from "../../../../db/smtp";
 
 export const dynamic = "force-dynamic";
 
@@ -19,68 +30,81 @@ type SecurityRow = {
   twoFactorEnabled: number;
   email: string;
   masterPasswordHash: string;
+  masterPasswordSalt: string;
+  masterPasswordIterations: number;
   maxFailedAttempts: number;
   lockoutMinutes: number;
   smtpEnabled: number;
   smtpFeatureEnabled: number;
 };
 
-const FIXED_VERIFICATION_CODE = "246810";
-
 function isNotificationEmailConfigured(email: string) {
-  return (
-    !email.includes("*") &&
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
-  );
+  return !email.includes("*") && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function bounded(value: unknown, fallback: string, max: number) {
+  return String(value ?? fallback).trim().slice(0, max) || fallback;
 }
 
 export async function POST(request: Request) {
   try {
-    await ensureVaultSchema();
-    const payload = (await request.json()) as Record<string, unknown>;
-    const deviceId = String(payload.deviceId ?? "").trim();
-    const masterPassword = String(payload.masterPassword ?? "");
-    const deviceName = String(payload.deviceName ?? "Windows 桌面设备");
-    const browser = String(payload.browser ?? "浏览器");
-    const location = String(payload.location ?? "当前网络");
-
-    if (!deviceId || !masterPassword) {
+    const address = clientAddress(request);
+    const rate = enforceRateLimit(`unlock:${address}`, 15, 60_000);
+    if (!rate.allowed) {
       return Response.json(
-        { error: "请输入主密码并提供设备标识" },
+        { error: "登录请求过于频繁，请稍后再试" },
+        { status: 429, headers: { "retry-after": String(rate.retryAfter) } },
+      );
+    }
+
+    await ensureVaultSchema();
+    const payload = await readJsonBody(request);
+    const deviceId = String(payload.deviceId ?? "").trim();
+    const deviceCredential = String(payload.deviceCredential ?? "").trim();
+    const masterPassword = String(payload.masterPassword ?? "");
+    const deviceName = bounded(payload.deviceName, "桌面设备", 120);
+    const browser = bounded(payload.browser, "浏览器", 120);
+    const location = bounded(payload.location, "当前网络", 120);
+
+    if (
+      !/^[A-Za-z0-9_-]{8,128}$/.test(deviceId) ||
+      !masterPassword ||
+      masterPassword.length > 128 ||
+      deviceCredential.length > 128
+    ) {
+      return Response.json(
+        { error: "登录信息格式不正确" },
         { status: 400 },
       );
     }
 
     const settings = await env.DB.prepare(
-      `SELECT
-        two_factor_enabled AS twoFactorEnabled,
-        email,
+      `SELECT two_factor_enabled AS twoFactorEnabled, email,
         master_password_hash AS masterPasswordHash,
+        master_password_salt AS masterPasswordSalt,
+        master_password_iterations AS masterPasswordIterations,
         max_failed_attempts AS maxFailedAttempts,
         lockout_minutes AS lockoutMinutes,
         smtp_enabled AS smtpEnabled,
         smtp_feature_enabled AS smtpFeatureEnabled
-      FROM security_settings
-      WHERE id = 1`,
+       FROM security_settings WHERE id = 1`,
     ).first<SecurityRow>();
-
     if (!settings) {
       return Response.json({ error: "安全设置不可用" }, { status: 500 });
     }
 
+    const addressHash = await hashSecret(address);
+    const attemptKey = `ip:${addressHash.slice(0, 40)}`;
     const attempt = await env.DB.prepare(
       "SELECT failed_count AS failedCount, locked_until AS lockedUntil FROM login_attempts WHERE device_id = ?",
     )
-      .bind(deviceId)
+      .bind(attemptKey)
       .first<{ failedCount: number; lockedUntil: string | null }>();
-
-    const lockedUntilMs = attempt?.lockedUntil
-      ? Date.parse(attempt.lockedUntil)
-      : 0;
+    const lockedUntilMs = attempt?.lockedUntil ? Date.parse(attempt.lockedUntil) : 0;
     if (lockedUntilMs > Date.now()) {
       return Response.json(
         {
-          error: "该设备因多次输入错误已被临时锁定",
+          error: "当前网络因多次输入错误已被临时锁定",
           lockedUntil: attempt?.lockedUntil,
           remainingSeconds: Math.ceil((lockedUntilMs - Date.now()) / 1000),
         },
@@ -88,91 +112,89 @@ export async function POST(request: Request) {
       );
     }
 
-    const providedHash = await hashMasterPassword(masterPassword);
+    const validPassword = await verifyMasterPassword(
+      masterPassword,
+      settings.masterPasswordHash,
+      settings.masterPasswordSalt,
+      settings.masterPasswordIterations,
+    );
     const acceptedLegacyDefault =
-      settings.masterPasswordHash ===
-        LEGACY_DEFAULT_MASTER_PASSWORD_HASH &&
+      settings.masterPasswordHash === LEGACY_DEFAULT_MASTER_PASSWORD_HASH &&
       masterPassword === DEFAULT_MASTER_PASSWORD;
-    if (
-      providedHash !== settings.masterPasswordHash &&
-      !acceptedLegacyDefault
-    ) {
-      const failedCount = (attempt?.failedCount ?? 0) + 1;
-      const shouldLock = failedCount >= settings.maxFailedAttempts;
-      const lockedUntil = shouldLock
-        ? new Date(Date.now() + settings.lockoutMinutes * 60_000).toISOString()
-        : null;
 
+    if (!validPassword && !acceptedLegacyDefault) {
       await env.DB.prepare(
-        `INSERT INTO login_attempts (device_id, failed_count, locked_until, updated_at)
-         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        "DELETE FROM login_attempts WHERE updated_at < datetime('now', '-7 days')",
+      ).run();
+      const now = new Date().toISOString();
+      const lockedUntil = new Date(
+        Date.now() + settings.lockoutMinutes * 60_000,
+      ).toISOString();
+      const updated = await env.DB.prepare(
+        `INSERT INTO login_attempts
+          (device_id, failed_count, locked_until, updated_at)
+         VALUES (?, 1, NULL, CURRENT_TIMESTAMP)
          ON CONFLICT(device_id) DO UPDATE SET
-           failed_count = excluded.failed_count,
-           locked_until = excluded.locked_until,
-           updated_at = CURRENT_TIMESTAMP`,
+           failed_count = CASE
+             WHEN login_attempts.locked_until IS NOT NULL
+                  AND login_attempts.locked_until <= ? THEN 1
+             ELSE login_attempts.failed_count + 1
+           END,
+           locked_until = CASE
+             WHEN (CASE
+               WHEN login_attempts.locked_until IS NOT NULL
+                    AND login_attempts.locked_until <= ? THEN 1
+               ELSE login_attempts.failed_count + 1
+             END) >= ? THEN ?
+             ELSE NULL
+           END,
+           updated_at = CURRENT_TIMESTAMP
+         RETURNING failed_count AS failedCount, locked_until AS lockedUntil`,
       )
-        .bind(deviceId, failedCount, lockedUntil)
-        .run();
-
-      if (shouldLock) {
+        .bind(attemptKey, now, now, settings.maxFailedAttempts, lockedUntil)
+        .first<{ failedCount: number; lockedUntil: string | null }>();
+      const failedCount = updated?.failedCount ?? 1;
+      if (updated?.lockedUntil) {
         return Response.json(
           {
-            error: `密码连续错误 ${settings.maxFailedAttempts} 次，该设备已锁定 ${settings.lockoutMinutes} 分钟`,
-            lockedUntil,
+            error: `密码连续错误 ${settings.maxFailedAttempts} 次，当前网络已锁定 ${settings.lockoutMinutes} 分钟`,
+            lockedUntil: updated.lockedUntil,
             remainingSeconds: settings.lockoutMinutes * 60,
           },
           { status: 423 },
         );
       }
-
       return Response.json(
         {
           error: "主密码不正确",
-          attemptsRemaining: settings.maxFailedAttempts - failedCount,
+          attemptsRemaining: Math.max(0, settings.maxFailedAttempts - failedCount),
         },
         { status: 401 },
       );
     }
 
-    await env.DB.prepare(
-      `INSERT INTO login_attempts (device_id, failed_count, locked_until, updated_at)
-       VALUES (?, 0, NULL, CURRENT_TIMESTAMP)
-       ON CONFLICT(device_id) DO UPDATE SET
-         failed_count = 0,
-         locked_until = NULL,
-         updated_at = CURRENT_TIMESTAMP`,
-    )
-      .bind(deviceId)
+    await env.DB.prepare("DELETE FROM login_attempts WHERE device_id = ?")
+      .bind(attemptKey)
       .run();
+    await env.DB.prepare(
+      "DELETE FROM login_attempts WHERE updated_at < datetime('now', '-7 days')",
+    ).run();
 
-    const trustedDevice = await env.DB.prepare(
-      "SELECT id FROM trusted_devices WHERE id = ?",
-    )
-      .bind(deviceId)
-      .first<{ id: string }>();
-
+    const trusted = await hasTrustedDeviceCredential(deviceId, deviceCredential);
     if (
       settings.twoFactorEnabled &&
       settings.smtpFeatureEnabled &&
       isNotificationEmailConfigured(settings.email) &&
-      !trustedDevice
+      !trusted
     ) {
       if (!settings.smtpEnabled) {
         return Response.json(
-          { error: "新设备验证邮件尚未配置，请先在旧设备的设置中测试 SMTP" },
+          { error: "新设备验证邮件尚未配置，请先在已验证设备中测试 SMTP" },
           { status: 503 },
         );
       }
 
-      const challengeToken = createOpaqueToken();
-      const challengeHash = await hashSecret(challengeToken);
-      const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
-      await env.DB.prepare(
-        "INSERT INTO verification_challenges (token_hash, device_id, expires_at) VALUES (?, ?, ?)",
-      )
-        .bind(challengeHash, deviceId, expiresAt)
-        .run();
-
+      const challenge = await createCodeChallenge(deviceId, "device");
       try {
         const smtp = await getReadySmtpConfig();
         await sendSmtpMail({
@@ -187,58 +209,53 @@ export async function POST(request: Request) {
           text: [
             "检测到一台新设备正在尝试进入你的钥密密码库。",
             "",
-            `验证码：${FIXED_VERIFICATION_CODE}`,
+            `验证码：${challenge.code}`,
             "",
-            "验证码 10 分钟内有效。如果不是你本人操作，请不要向任何人提供此验证码。",
+            "验证码只能使用一次，10 分钟内有效。若非本人操作，请立即修改主密码。",
           ].join("\n"),
         });
       } catch (error) {
         await env.DB.prepare(
           "DELETE FROM verification_challenges WHERE token_hash = ?",
         )
-          .bind(challengeHash)
+          .bind(challenge.tokenHash)
           .run();
-        const detail =
-          error instanceof Error ? error.message : "SMTP 发送失败";
+        const detail = error instanceof Error ? error.message : "SMTP 发送失败";
         return Response.json(
           { error: `验证码邮件发送失败：${detail}` },
           { status: 502 },
         );
       }
-
       return Response.json({
         needsVerification: true,
-        challengeToken,
+        challengeToken: challenge.token,
         email: settings.email,
         emailSent: true,
       });
     }
 
-    if (trustedDevice) {
-      await env.DB.prepare(
-        "UPDATE trusted_devices SET last_active = ? WHERE id = ?",
-      )
-        .bind("刚刚", deviceId)
-        .run();
+    let nextDeviceCredential: string | undefined;
+    if (trusted) {
+      await touchTrustedDevice(deviceId);
     } else {
-      await env.DB.prepare(
-        `INSERT INTO trusted_devices (id, device_name, browser, location, last_active, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-        .bind(
-          deviceId,
-          deviceName,
-          browser,
-          location,
-          "刚刚",
-          new Date().toISOString().slice(0, 10),
-        )
-        .run();
+      nextDeviceCredential = await registerTrustedDevice({
+        deviceId,
+        deviceName,
+        browser,
+        location,
+      });
     }
-
     const sessionToken = await createVaultSession(deviceId);
-    return Response.json({ needsVerification: false, sessionToken });
+    return Response.json({
+      needsVerification: false,
+      sessionToken,
+      ...(nextDeviceCredential
+        ? { deviceCredential: nextDeviceCredential }
+        : {}),
+    });
   } catch (error) {
+    const requestError = requestErrorResponse(error);
+    if (requestError) return requestError;
     const message = error instanceof Error ? error.message : "验证失败";
     return Response.json({ error: message }, { status: 500 });
   }

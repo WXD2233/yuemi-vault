@@ -1,5 +1,11 @@
 import { env, type SqlitePreparedStatement } from "@/runtime/database";
 import {
+  createMasterPasswordSalt,
+  currentMasterPasswordIterations,
+  hashMasterPassword,
+} from "./auth";
+import {
+  DEFAULT_MASTER_PASSWORD,
   DEFAULT_MASTER_PASSWORD_HASH,
   LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
 } from "./security-constants";
@@ -9,10 +15,31 @@ const OLDER_MASTER_PASSWORD_HASH =
 const LEGACY_MASTER_PASSWORD_HASH =
   "c079208ec8d20c1aab38ffdc12de7252735ba1ab334e19b56bc1c237f89aaced";
 
-export async function ensureVaultSchema() {
-  if (!env.DB) {
-    throw new Error("The local SQLite database is unavailable.");
+async function columnNames(table: string) {
+  const columns = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{
+    name: string;
+  }>();
+  return new Set(columns.results.map((column) => column.name));
+}
+
+async function addColumn(
+  columns: Set<string>,
+  table: string,
+  name: string,
+  declaration: string,
+) {
+  if (!columns.has(name)) {
+    await env.DB.prepare(
+      `ALTER TABLE ${table} ADD COLUMN ${name} ${declaration}`,
+    ).run();
+    columns.add(name);
   }
+}
+
+let schemaReady: Promise<void> | null = null;
+
+async function initializeVaultSchema() {
+  if (!env.DB) throw new Error("本地 SQLite 数据库不可用");
 
   await env.DB.batch([
     env.DB.prepare(`
@@ -31,6 +58,7 @@ export async function ensureVaultSchema() {
     env.DB.prepare(`
       CREATE TABLE IF NOT EXISTS trusted_devices (
         id TEXT PRIMARY KEY NOT NULL,
+        credential_hash TEXT NOT NULL DEFAULT '',
         device_name TEXT NOT NULL,
         browser TEXT NOT NULL,
         location TEXT NOT NULL,
@@ -41,9 +69,12 @@ export async function ensureVaultSchema() {
     env.DB.prepare(`
       CREATE TABLE IF NOT EXISTS security_settings (
         id INTEGER PRIMARY KEY NOT NULL,
-        two_factor_enabled INTEGER NOT NULL DEFAULT 1,
-        email TEXT NOT NULL DEFAULT 'w***@example.com',
+        two_factor_enabled INTEGER NOT NULL DEFAULT 0,
+        email TEXT NOT NULL DEFAULT '',
         master_password_hash TEXT NOT NULL DEFAULT '${DEFAULT_MASTER_PASSWORD_HASH}',
+        master_password_salt TEXT NOT NULL DEFAULT 'yuemi-master-v1',
+        master_password_iterations INTEGER NOT NULL DEFAULT 100000,
+        requires_password_change INTEGER NOT NULL DEFAULT 1,
         max_failed_attempts INTEGER NOT NULL DEFAULT 5,
         lockout_minutes INTEGER NOT NULL DEFAULT 15,
         smtp_provider TEXT NOT NULL DEFAULT '',
@@ -56,7 +87,11 @@ export async function ensureVaultSchema() {
         smtp_from_name TEXT NOT NULL DEFAULT '钥密',
         smtp_enabled INTEGER NOT NULL DEFAULT 0,
         smtp_feature_enabled INTEGER NOT NULL DEFAULT 0,
-        smtp_verified_at TEXT
+        smtp_verified_at TEXT,
+        recovery_cipher TEXT NOT NULL DEFAULT '',
+        recovery_iv TEXT NOT NULL DEFAULT '',
+        recovery_salt TEXT NOT NULL DEFAULT '',
+        recovery_iterations INTEGER NOT NULL DEFAULT 600000
       )
     `),
     env.DB.prepare(`
@@ -79,224 +114,182 @@ export async function ensureVaultSchema() {
       CREATE TABLE IF NOT EXISTS verification_challenges (
         token_hash TEXT PRIMARY KEY NOT NULL,
         device_id TEXT NOT NULL,
+        purpose TEXT NOT NULL DEFAULT 'device',
+        code_hash TEXT NOT NULL DEFAULT '',
+        failed_count INTEGER NOT NULL DEFAULT 0,
         expires_at TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `),
   ]);
 
-  const entryColumns = await env.DB.prepare(
-    "PRAGMA table_info(vault_entries)",
-  ).all<{ name: string }>();
-  const existingEntryColumns = new Set(
-    entryColumns.results.map((column) => column.name),
-  );
-  if (!existingEntryColumns.has("notes")) {
-    await env.DB.prepare(
-      "ALTER TABLE vault_entries ADD COLUMN notes TEXT NOT NULL DEFAULT ''",
-    ).run();
-  }
+  const entryColumns = await columnNames("vault_entries");
+  await addColumn(entryColumns, "vault_entries", "notes", "TEXT NOT NULL DEFAULT ''");
 
-  const settingsColumns = await env.DB.prepare(
-    "PRAGMA table_info(security_settings)",
-  ).all<{ name: string }>();
-  const existingColumns = new Set(
-    settingsColumns.results.map((column) => column.name),
+  const deviceColumns = await columnNames("trusted_devices");
+  await addColumn(
+    deviceColumns,
+    "trusted_devices",
+    "credential_hash",
+    "TEXT NOT NULL DEFAULT ''",
   );
 
-  if (!existingColumns.has("master_password_hash")) {
-    await env.DB.prepare(
-      `ALTER TABLE security_settings ADD COLUMN master_password_hash TEXT NOT NULL DEFAULT '${DEFAULT_MASTER_PASSWORD_HASH}'`,
-    ).run();
+  const settingsColumns = await columnNames("security_settings");
+  await addColumn(
+    settingsColumns,
+    "security_settings",
+    "master_password_hash",
+    `TEXT NOT NULL DEFAULT '${DEFAULT_MASTER_PASSWORD_HASH}'`,
+  );
+  await addColumn(
+    settingsColumns,
+    "security_settings",
+    "master_password_salt",
+    "TEXT NOT NULL DEFAULT 'yuemi-master-v1'",
+  );
+  await addColumn(
+    settingsColumns,
+    "security_settings",
+    "master_password_iterations",
+    "INTEGER NOT NULL DEFAULT 100000",
+  );
+  const hadRequiresPasswordChange = settingsColumns.has("requires_password_change");
+  await addColumn(
+    settingsColumns,
+    "security_settings",
+    "requires_password_change",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
+
+  const settingsMigrations: Array<[string, string]> = [
+    ["max_failed_attempts", "INTEGER NOT NULL DEFAULT 5"],
+    ["lockout_minutes", "INTEGER NOT NULL DEFAULT 15"],
+    ["smtp_provider", "TEXT NOT NULL DEFAULT ''"],
+    ["smtp_host", "TEXT NOT NULL DEFAULT ''"],
+    ["smtp_port", "INTEGER NOT NULL DEFAULT 465"],
+    ["smtp_security", "TEXT NOT NULL DEFAULT 'tls'"],
+    ["smtp_username", "TEXT NOT NULL DEFAULT ''"],
+    ["smtp_secret_cipher", "TEXT NOT NULL DEFAULT ''"],
+    ["smtp_secret_iv", "TEXT NOT NULL DEFAULT ''"],
+    ["smtp_from_name", "TEXT NOT NULL DEFAULT '钥密'"],
+    ["smtp_enabled", "INTEGER NOT NULL DEFAULT 0"],
+    ["smtp_feature_enabled", "INTEGER NOT NULL DEFAULT 0"],
+    ["smtp_verified_at", "TEXT"],
+    ["recovery_cipher", "TEXT NOT NULL DEFAULT ''"],
+    ["recovery_iv", "TEXT NOT NULL DEFAULT ''"],
+    ["recovery_salt", "TEXT NOT NULL DEFAULT ''"],
+    ["recovery_iterations", "INTEGER NOT NULL DEFAULT 600000"],
+  ];
+  for (const [name, declaration] of settingsMigrations) {
+    await addColumn(settingsColumns, "security_settings", name, declaration);
   }
-  if (!existingColumns.has("max_failed_attempts")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN max_failed_attempts INTEGER NOT NULL DEFAULT 5",
-    ).run();
-  }
-  if (!existingColumns.has("lockout_minutes")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN lockout_minutes INTEGER NOT NULL DEFAULT 15",
-    ).run();
-  }
-  if (!existingColumns.has("smtp_provider")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN smtp_provider TEXT NOT NULL DEFAULT ''",
-    ).run();
-  }
-  if (!existingColumns.has("smtp_host")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN smtp_host TEXT NOT NULL DEFAULT ''",
-    ).run();
-  }
-  if (!existingColumns.has("smtp_port")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN smtp_port INTEGER NOT NULL DEFAULT 465",
-    ).run();
-  }
-  if (!existingColumns.has("smtp_security")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN smtp_security TEXT NOT NULL DEFAULT 'tls'",
-    ).run();
-  }
-  if (!existingColumns.has("smtp_username")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN smtp_username TEXT NOT NULL DEFAULT ''",
-    ).run();
-  }
-  if (!existingColumns.has("smtp_secret_cipher")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN smtp_secret_cipher TEXT NOT NULL DEFAULT ''",
-    ).run();
-  }
-  if (!existingColumns.has("smtp_secret_iv")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN smtp_secret_iv TEXT NOT NULL DEFAULT ''",
-    ).run();
-  }
-  if (!existingColumns.has("smtp_from_name")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN smtp_from_name TEXT NOT NULL DEFAULT '钥密'",
-    ).run();
-  }
-  if (!existingColumns.has("smtp_enabled")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN smtp_enabled INTEGER NOT NULL DEFAULT 0",
-    ).run();
-  }
-  if (!existingColumns.has("smtp_feature_enabled")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN smtp_feature_enabled INTEGER NOT NULL DEFAULT 0",
-    ).run();
-  }
-  if (!existingColumns.has("smtp_verified_at")) {
-    await env.DB.prepare(
-      "ALTER TABLE security_settings ADD COLUMN smtp_verified_at TEXT",
-    ).run();
-  }
+
+  const challengeColumns = await columnNames("verification_challenges");
+  await addColumn(
+    challengeColumns,
+    "verification_challenges",
+    "purpose",
+    "TEXT NOT NULL DEFAULT 'device'",
+  );
+  await addColumn(
+    challengeColumns,
+    "verification_challenges",
+    "code_hash",
+    "TEXT NOT NULL DEFAULT ''",
+  );
+  await addColumn(
+    challengeColumns,
+    "verification_challenges",
+    "failed_count",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
 
   await env.DB.prepare(
     "UPDATE security_settings SET master_password_hash = ? WHERE id = 1 AND master_password_hash IN (?, ?)",
   )
-    .bind(
-      DEFAULT_MASTER_PASSWORD_HASH,
-      OLDER_MASTER_PASSWORD_HASH,
-      LEGACY_MASTER_PASSWORD_HASH,
-    )
+    .bind(DEFAULT_MASTER_PASSWORD_HASH, OLDER_MASTER_PASSWORD_HASH, LEGACY_MASTER_PASSWORD_HASH)
     .run();
 
   await env.DB.prepare(
     "UPDATE security_settings SET master_password_hash = ? WHERE id = 1 AND master_password_hash = ? AND NOT EXISTS (SELECT 1 FROM vault_entries WHERE password_cipher != 'encrypted-demo-value' AND password_iv != 'demo-iv')",
   )
-    .bind(
-      DEFAULT_MASTER_PASSWORD_HASH,
-      LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
-    )
+    .bind(DEFAULT_MASTER_PASSWORD_HASH, LEGACY_DEFAULT_MASTER_PASSWORD_HASH)
     .run();
+
+  if (!hadRequiresPasswordChange) {
+    await env.DB.prepare(
+      "UPDATE security_settings SET requires_password_change = CASE WHEN master_password_hash IN (?, ?) THEN 1 ELSE 0 END WHERE id = 1",
+    )
+      .bind(DEFAULT_MASTER_PASSWORD_HASH, LEGACY_DEFAULT_MASTER_PASSWORD_HASH)
+      .run();
+  }
 
   await env.DB.prepare(
     "UPDATE security_settings SET two_factor_enabled = 0 WHERE email = '' OR email LIKE '%*%'",
   ).run();
 
-  const entryCount = await env.DB.prepare(
-    "SELECT COUNT(*) AS total FROM vault_entries",
-  ).first<{ total: number }>();
-  const deviceCount = await env.DB.prepare(
-    "SELECT COUNT(*) AS total FROM trusted_devices",
-  ).first<{ total: number }>();
   const settingsCount = await env.DB.prepare(
     "SELECT COUNT(*) AS total FROM security_settings",
   ).first<{ total: number }>();
-
+  const firstInstall = !settingsCount?.total;
   const seedStatements: SqlitePreparedStatement[] = [];
 
-  if (!entryCount?.total) {
+  if (firstInstall) {
+    const initialPassword =
+      process.env.YUEMI_INITIAL_PASSWORD?.trim() ||
+      (process.env.NODE_ENV === "production" ? "" : DEFAULT_MASTER_PASSWORD);
+    if (!initialPassword) {
+      throw new Error("生产环境首次启动必须设置 YUEMI_INITIAL_PASSWORD");
+    }
+    if (initialPassword.length < 8 || initialPassword.length > 128) {
+      throw new Error("YUEMI_INITIAL_PASSWORD 长度必须为 8–128 位");
+    }
+    const salt = createMasterPasswordSalt();
+    const iterations = currentMasterPasswordIterations();
+    const passwordHash = await hashMasterPassword(initialPassword, salt, iterations);
     seedStatements.push(
       env.DB.prepare(
-        "INSERT INTO vault_entries (id, project_name, account, category, security_status, password_cipher, password_iv, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      ).bind(
-        "entry-github",
-        "GitHub",
-        "dev***@example.com",
-        "开发工具",
-        "安全",
-        "encrypted-demo-value",
-        "demo-iv",
-        "2026-07-26 14:30",
-      ),
-      env.DB.prepare(
-        "INSERT INTO vault_entries (id, project_name, account, category, security_status, password_cipher, password_iv, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      ).bind(
-        "entry-email",
-        "工作邮箱",
-        "w***@example.com",
-        "电子邮件",
-        "安全",
-        "encrypted-demo-value",
-        "demo-iv",
-        "2026-07-26 10:15",
-      ),
-      env.DB.prepare(
-        "INSERT INTO vault_entries (id, project_name, account, category, security_status, password_cipher, password_iv, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      ).bind(
-        "entry-cloud",
-        "云服务器",
-        "root-admin",
-        "服务器",
-        "一般",
-        "encrypted-demo-value",
-        "demo-iv",
-        "2026-07-25 09:42",
-      ),
-      env.DB.prepare(
-        "INSERT INTO vault_entries (id, project_name, account, category, security_status, password_cipher, password_iv, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      ).bind(
-        "entry-bank",
-        "网上银行",
-        "6222 **** 8831",
-        "金融",
-        "安全",
-        "encrypted-demo-value",
-        "demo-iv",
-        "2026-07-24 16:08",
-      ),
+        `INSERT INTO security_settings
+          (id, two_factor_enabled, email, master_password_hash,
+           master_password_salt, master_password_iterations,
+           requires_password_change, max_failed_attempts, lockout_minutes)
+         VALUES (1, 0, '', ?, ?, ?, 1, 5, 15)`,
+      ).bind(passwordHash, salt, iterations),
     );
+
+    const demoEntries = [
+      ["entry-github", "GitHub", "dev***@example.com", "开发工具", "安全", "2026-07-26 14:30"],
+      ["entry-email", "工作邮箱", "w***@example.com", "电子邮件", "安全", "2026-07-26 10:15"],
+      ["entry-cloud", "云服务器", "root-admin", "服务器", "一般", "2026-07-25 09:42"],
+      ["entry-bank", "网上银行", "6222 **** 8831", "金融", "安全", "2026-07-24 16:08"],
+    ];
+    for (const [id, project, account, category, status, updatedAt] of demoEntries) {
+      seedStatements.push(
+        env.DB.prepare(
+          `INSERT INTO vault_entries
+            (id, project_name, account, category, security_status,
+             password_cipher, password_iv, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'encrypted-demo-value', 'demo-iv', ?)`,
+        ).bind(id, project, account, category, status, updatedAt),
+      );
+    }
   }
 
-  if (!deviceCount?.total) {
-    seedStatements.push(
-      env.DB.prepare(
-        "INSERT INTO trusted_devices (id, device_name, browser, location, last_active, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      ).bind(
-        "trusted-macbook",
-        "MacBook Pro",
-        "Safari 18",
-        "香港",
-        "今天 09:42",
-        "2026-07-18",
-      ),
-      env.DB.prepare(
-        "INSERT INTO trusted_devices (id, device_name, browser, location, last_active, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      ).bind(
-        "trusted-iphone",
-        "iPhone 16",
-        "钥密移动端",
-        "香港",
-        "昨天 22:16",
-        "2026-07-20",
-      ),
-    );
-  }
+  if (seedStatements.length) await env.DB.batch(seedStatements);
 
-  if (!settingsCount?.total) {
-    seedStatements.push(
-      env.DB.prepare(
-        "INSERT INTO security_settings (id, two_factor_enabled, email, master_password_hash, max_failed_attempts, lockout_minutes) VALUES (1, 1, ?, ?, 5, 15)",
-      ).bind("w***@example.com", DEFAULT_MASTER_PASSWORD_HASH),
-    );
-  }
+  await env.DB.exec(`
+    CREATE INDEX IF NOT EXISTS vault_sessions_expires_idx ON vault_sessions(expires_at);
+    CREATE INDEX IF NOT EXISTS verification_challenges_expires_idx ON verification_challenges(expires_at);
+    CREATE INDEX IF NOT EXISTS login_attempts_updated_idx ON login_attempts(updated_at);
+  `);
+}
 
-  if (seedStatements.length) {
-    await env.DB.batch(seedStatements);
+export async function ensureVaultSchema() {
+  schemaReady ??= initializeVaultSchema();
+  try {
+    await schemaReady;
+  } catch (error) {
+    schemaReady = null;
+    throw error;
   }
 }

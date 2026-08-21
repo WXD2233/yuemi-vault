@@ -1,4 +1,6 @@
 import { env } from "@/runtime/database";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 
 export type SmtpSecurity = "tls" | "starttls";
 
@@ -41,9 +43,7 @@ function base64ToBytes(value: string) {
 }
 
 async function getEncryptionKey() {
-  const keyValue = (
-    env as typeof env & { SMTP_CONFIG_KEY?: string }
-  ).SMTP_CONFIG_KEY;
+  const keyValue = process.env.SMTP_CONFIG_KEY;
   if (!keyValue || keyValue.length < 24) {
     throw new Error("服务器尚未配置 SMTP_CONFIG_KEY");
   }
@@ -59,6 +59,58 @@ async function getEncryptionKey() {
     false,
     ["encrypt", "decrypt"],
   );
+}
+
+function isPublicIpv4(address: string) {
+  const parts = address.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b, c] = parts;
+  return !(
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 192 && b === 0 && c === 0) ||
+    (a === 192 && b === 0 && c === 2) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    (a === 198 && b === 51 && c === 100) ||
+    (a === 203 && b === 0 && c === 113) ||
+    a >= 224
+  );
+}
+
+export function isPublicIp(address: string) {
+  const family = isIP(address);
+  if (family === 4) return isPublicIpv4(address);
+  if (family !== 6) return false;
+  const normalized = address.toLowerCase();
+  if (normalized.startsWith("::ffff:") || normalized.includes(".")) {
+    return false;
+  }
+  return !(
+    normalized === "::" ||
+    normalized === "::1" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    /^fe[89ab]/.test(normalized) ||
+    normalized.startsWith("ff") ||
+    normalized.startsWith("2001:db8:")
+  );
+}
+
+export async function resolvePublicSmtpAddress(host: string) {
+  const normalizedHost = normalizeSmtpHost(host);
+  if (!normalizedHost) throw new Error("SMTP 服务器域名格式不正确");
+  const addresses = await lookup(normalizedHost, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some((item) => !isPublicIp(item.address))) {
+    throw new Error("SMTP 服务器不能解析到本机、内网或保留地址");
+  }
+  return { address: addresses[0].address, servername: normalizedHost };
 }
 
 export async function encryptSmtpSecret(secret: string) {

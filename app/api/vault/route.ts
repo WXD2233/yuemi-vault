@@ -2,10 +2,17 @@ import { env } from "@/runtime/database";
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import {
+  createMasterPasswordSalt,
+  currentMasterPasswordIterations,
   getVaultSession,
   hashMasterPassword,
+  verifyMasterPassword,
 } from "../../../db/auth";
 import { ensureVaultSchema } from "../../../db/ensure";
+import {
+  readJsonBody,
+  requestErrorResponse,
+} from "../../../db/http-security";
 import {
   decryptSmtpSecret,
   encryptSmtpSecret,
@@ -19,7 +26,6 @@ import {
 import { sendSmtpMail } from "../../../db/smtp";
 import {
   DEFAULT_MASTER_PASSWORD,
-  DEFAULT_MASTER_PASSWORD_HASH,
   LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
 } from "../../../db/security-constants";
 import {
@@ -30,7 +36,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const ENCRYPTED_RECORD_PREFIX = "yv2.";
+const ENCRYPTED_RECORD_PATTERN =
+  /^yv(?:2\.[A-Za-z0-9+/=]+|3\.600000\.[A-Za-z0-9+/=]+)\.[A-Za-z0-9+/=]+$/;
 const encryptedStorageFields = {
   projectName: "加密记录",
   account: "••••••••",
@@ -87,7 +94,14 @@ export async function GET(request: Request) {
         .from(vaultEntries)
         .orderBy(desc(vaultEntries.updatedAt)),
       db
-        .select()
+        .select({
+          id: trustedDevices.id,
+          deviceName: trustedDevices.deviceName,
+          browser: trustedDevices.browser,
+          location: trustedDevices.location,
+          lastActive: trustedDevices.lastActive,
+          createdAt: trustedDevices.createdAt,
+        })
         .from(trustedDevices)
         .orderBy(desc(trustedDevices.lastActive)),
       db
@@ -116,20 +130,22 @@ export async function GET(request: Request) {
             smtpEnabled: settings.smtpEnabled,
             smtpFeatureEnabled: settings.smtpFeatureEnabled,
             smtpVerifiedAt: settings.smtpVerifiedAt,
-            requiresPasswordChange:
-              settings.masterPasswordHash === DEFAULT_MASTER_PASSWORD_HASH ||
-              settings.masterPasswordHash ===
-                LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
+            requiresPasswordChange: settings.requiresPasswordChange,
             usesLegacyDefaultEncryption:
               settings.masterPasswordHash ===
               LEGACY_DEFAULT_MASTER_PASSWORD_HASH,
             hasSmtpSecret: Boolean(
               settings.smtpSecretCipher && settings.smtpSecretIv,
             ),
+            hasRecoveryKey: Boolean(
+              settings.recoveryCipher &&
+                settings.recoveryIv &&
+                settings.recoverySalt,
+            ),
           }
         : {
-            twoFactorEnabled: true,
-            email: "w***@example.com",
+            twoFactorEnabled: false,
+            email: "",
             maxFailedAttempts: 5,
             lockoutMinutes: 15,
             smtpProvider: "",
@@ -144,6 +160,7 @@ export async function GET(request: Request) {
             requiresPasswordChange: true,
             usesLegacyDefaultEncryption: false,
             hasSmtpSecret: false,
+            hasRecoveryKey: false,
           },
     });
   } catch (error) {
@@ -159,20 +176,26 @@ export async function POST(request: Request) {
       return authorization.response;
     }
 
-    const payload = (await request.json()) as Record<string, unknown>;
+    const payload = await readJsonBody(request, 25 * 1024 * 1024);
     const action = String(payload.action ?? "");
     const db = getDb();
 
+    if (action === "logout") {
+      await env.DB.prepare("DELETE FROM vault_sessions WHERE token_hash = ?")
+        .bind(authorization.session.tokenHash)
+        .run();
+      return Response.json({ ok: true });
+    }
+
     if (action !== "change-master-password") {
       const settings = await db
-        .select({ masterPasswordHash: securitySettings.masterPasswordHash })
+        .select({
+          requiresPasswordChange: securitySettings.requiresPasswordChange,
+        })
         .from(securitySettings)
         .where(eq(securitySettings.id, 1))
         .limit(1);
-      const requiresPasswordChange =
-        settings[0]?.masterPasswordHash === DEFAULT_MASTER_PASSWORD_HASH ||
-        settings[0]?.masterPasswordHash ===
-          LEGACY_DEFAULT_MASTER_PASSWORD_HASH;
+      const requiresPasswordChange = Boolean(settings[0]?.requiresPasswordChange);
 
       if (action === "abandon-first-login") {
         if (requiresPasswordChange) {
@@ -204,7 +227,7 @@ export async function POST(request: Request) {
         /[^A-Za-z0-9]/.test(newPassword),
       ].filter(Boolean).length;
 
-      if (!currentPassword) {
+      if (!currentPassword || currentPassword.length > 128) {
         return Response.json(
           { error: "请输入当前主密码" },
           { status: 400 },
@@ -228,19 +251,29 @@ export async function POST(request: Request) {
       }
 
       const settings = await db
-        .select({ masterPasswordHash: securitySettings.masterPasswordHash })
+        .select({
+          masterPasswordHash: securitySettings.masterPasswordHash,
+          masterPasswordSalt: securitySettings.masterPasswordSalt,
+          masterPasswordIterations: securitySettings.masterPasswordIterations,
+        })
         .from(securitySettings)
         .where(eq(securitySettings.id, 1))
         .limit(1);
-      const currentHash = await hashMasterPassword(currentPassword);
+      const passwordMatches = settings[0]
+        ? await verifyMasterPassword(
+            currentPassword,
+            settings[0].masterPasswordHash,
+            settings[0].masterPasswordSalt,
+            settings[0].masterPasswordIterations,
+          )
+        : false;
       const acceptedLegacyDefault =
         settings[0]?.masterPasswordHash ===
           LEGACY_DEFAULT_MASTER_PASSWORD_HASH &&
         currentPassword === DEFAULT_MASTER_PASSWORD;
       if (
         !settings[0]?.masterPasswordHash ||
-        (currentHash !== settings[0].masterPasswordHash &&
-          !acceptedLegacyDefault)
+        (!passwordMatches && !acceptedLegacyDefault)
       ) {
         return Response.json(
           { error: "当前主密码不正确" },
@@ -288,9 +321,9 @@ export async function POST(request: Request) {
         if (
           !storedIds.has(id) ||
           receivedIds.has(id) ||
-          passwordCipher.length > 200_000 ||
+          passwordCipher.length > 100_000 ||
           passwordIv.length > 256 ||
-          !/^yv2\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+$/.test(passwordCipher) ||
+          !ENCRYPTED_RECORD_PATTERN.test(passwordCipher) ||
           !/^[A-Za-z0-9+/=]+$/.test(passwordIv)
         ) {
           return Response.json(
@@ -302,7 +335,13 @@ export async function POST(request: Request) {
         nextEntries.push({ id, passwordCipher, passwordIv });
       }
 
-      const newHash = await hashMasterPassword(newPassword);
+      const newSalt = createMasterPasswordSalt();
+      const newIterations = currentMasterPasswordIterations();
+      const newHash = await hashMasterPassword(
+        newPassword,
+        newSalt,
+        newIterations,
+      );
       const updatedAt = new Date()
         .toISOString()
         .slice(0, 16)
@@ -326,8 +365,12 @@ export async function POST(request: Request) {
           ),
         ),
         env.DB.prepare(
-          "UPDATE security_settings SET master_password_hash = ? WHERE id = 1",
-        ).bind(newHash),
+          `UPDATE security_settings SET
+            master_password_hash = ?, master_password_salt = ?,
+            master_password_iterations = ?, requires_password_change = 0,
+            recovery_cipher = '', recovery_iv = '', recovery_salt = ''
+           WHERE id = 1`,
+        ).bind(newHash, newSalt, newIterations),
         env.DB.prepare("DELETE FROM vault_sessions"),
         env.DB.prepare("DELETE FROM login_attempts"),
         env.DB.prepare("DELETE FROM verification_challenges"),
@@ -342,9 +385,9 @@ export async function POST(request: Request) {
 
     if (action === "import-entries") {
       const entries = Array.isArray(payload.entries) ? payload.entries : [];
-      if (!entries.length || entries.length > 2000) {
+      if (!entries.length || entries.length > 1000) {
         return Response.json(
-          { error: "单次需要导入 1–2000 条加密记录" },
+          { error: "单次需要导入 1–1000 条加密记录" },
           { status: 400 },
         );
       }
@@ -358,9 +401,9 @@ export async function POST(request: Request) {
         const passwordCipher = String(record.passwordCipher ?? "");
         const passwordIv = String(record.passwordIv ?? "");
         if (
-          passwordCipher.length > 200_000 ||
+          passwordCipher.length > 100_000 ||
           passwordIv.length > 256 ||
-          !/^yv2\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+$/.test(passwordCipher) ||
+          !ENCRYPTED_RECORD_PATTERN.test(passwordCipher) ||
           !/^[A-Za-z0-9+/=]+$/.test(passwordIv)
         ) {
           return Response.json(
@@ -416,14 +459,22 @@ export async function POST(request: Request) {
         !account ||
         !category ||
         !passwordCipher ||
-        !passwordIv
+        !passwordIv ||
+        projectName.length > 120 ||
+        account.length > 320 ||
+        category.length > 80 ||
+        notes.length > 4_000 ||
+        passwordCipher.length > 100_000 ||
+        passwordIv.length > 256 ||
+        !ENCRYPTED_RECORD_PATTERN.test(passwordCipher) ||
+        !/^[A-Za-z0-9+/=]+$/.test(passwordIv)
       ) {
-        return Response.json({ error: "缺少密码记录字段" }, { status: 400 });
+        return Response.json({ error: "密码记录格式不正确" }, { status: 400 });
       }
 
       await db.insert(vaultEntries).values({
         id: crypto.randomUUID(),
-        ...(passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX)
+        ...(ENCRYPTED_RECORD_PATTERN.test(passwordCipher)
           ? encryptedStorageFields
           : { projectName, account, category, notes }),
         passwordCipher,
@@ -443,12 +494,27 @@ export async function POST(request: Request) {
       const passwordIv = String(payload.passwordIv ?? "");
       const notes = String(payload.notes ?? "").trim();
 
-      if (!id || !projectName || !account || !category) {
+      if (
+        !id ||
+        id.length > 128 ||
+        !projectName ||
+        projectName.length > 120 ||
+        !account ||
+        account.length > 320 ||
+        !category ||
+        category.length > 80 ||
+        notes.length > 4_000
+      ) {
         return Response.json({ error: "缺少密码记录字段" }, { status: 400 });
       }
       if (
         (passwordCipher && !passwordIv) ||
-        (!passwordCipher && passwordIv)
+        (!passwordCipher && passwordIv) ||
+        (passwordCipher &&
+          (passwordCipher.length > 100_000 ||
+            passwordIv.length > 256 ||
+            !ENCRYPTED_RECORD_PATTERN.test(passwordCipher) ||
+            !/^[A-Za-z0-9+/=]+$/.test(passwordIv)))
       ) {
         return Response.json({ error: "新密码密文不完整" }, { status: 400 });
       }
@@ -456,7 +522,7 @@ export async function POST(request: Request) {
       await db
         .update(vaultEntries)
         .set({
-          ...(passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX)
+          ...(ENCRYPTED_RECORD_PATTERN.test(passwordCipher)
             ? encryptedStorageFields
             : { projectName, account, category, notes }),
           updatedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
@@ -699,7 +765,56 @@ export async function POST(request: Request) {
         .update(securitySettings)
         .set({
           email,
-          ...(email ? {} : { twoFactorEnabled: false }),
+          ...(email
+            ? {}
+            : {
+                twoFactorEnabled: false,
+                recoveryCipher: "",
+                recoveryIv: "",
+                recoverySalt: "",
+              }),
+        })
+        .where(eq(securitySettings.id, 1));
+      return Response.json({ ok: true });
+    }
+
+    if (action === "set-recovery-material") {
+      const cipher = String(payload.cipher ?? "");
+      const iv = String(payload.iv ?? "");
+      const salt = String(payload.salt ?? "");
+      const iterations = Number(payload.iterations);
+      if (
+        cipher.length < 16 ||
+        cipher.length > 4_096 ||
+        iv.length < 12 ||
+        iv.length > 128 ||
+        salt.length < 16 ||
+        salt.length > 128 ||
+        iterations !== 600_000 ||
+        !/^[A-Za-z0-9+/=]+$/.test(cipher) ||
+        !/^[A-Za-z0-9+/=]+$/.test(iv) ||
+        !/^[A-Za-z0-9+/=]+$/.test(salt)
+      ) {
+        return Response.json({ error: "恢复密钥材料格式不正确" }, { status: 400 });
+      }
+      const settings = await db
+        .select({ email: securitySettings.email })
+        .from(securitySettings)
+        .where(eq(securitySettings.id, 1))
+        .limit(1);
+      if (!isNotificationEmailConfigured(settings[0]?.email ?? "")) {
+        return Response.json(
+          { error: "请先保存有效的通知邮箱" },
+          { status: 400 },
+        );
+      }
+      await db
+        .update(securitySettings)
+        .set({
+          recoveryCipher: cipher,
+          recoveryIv: iv,
+          recoverySalt: salt,
+          recoveryIterations: iterations,
         })
         .where(eq(securitySettings.id, 1));
       return Response.json({ ok: true });
@@ -728,16 +843,13 @@ export async function POST(request: Request) {
 
     if (action === "delete-device") {
       const id = String(payload.id ?? "");
-      if (!id) {
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
         return Response.json({ error: "设备 ID 不能为空" }, { status: 400 });
       }
 
       await env.DB.batch([
         env.DB.prepare("DELETE FROM trusted_devices WHERE id = ?").bind(id),
         env.DB.prepare("DELETE FROM vault_sessions WHERE device_id = ?").bind(
-          id,
-        ),
-        env.DB.prepare("DELETE FROM login_attempts WHERE device_id = ?").bind(
           id,
         ),
       ]);
@@ -749,6 +861,8 @@ export async function POST(request: Request) {
 
     return Response.json({ error: "未知操作" }, { status: 400 });
   } catch (error) {
+    const requestError = requestErrorResponse(error);
+    if (requestError) return requestError;
     return errorResponse(error);
   }
 }

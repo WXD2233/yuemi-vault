@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("ships an independent VPS deployment", async () => {
+test("ships a loopback-first VPS deployment with optional standalone HTTPS", async () => {
   const [installer, compose, dockerfile, caddyfile, readme, packageJson] =
     await Promise.all([
       readFile(new URL("../install-vps.sh", import.meta.url), "utf8"),
@@ -14,42 +14,37 @@ test("ships an independent VPS deployment", async () => {
     ]);
 
   assert.match(installer, /^#!\/usr\/bin\/env bash/);
-  assert.match(installer, /download\.docker\.com\/linux\/\$\{ID\}/);
-  assert.match(installer, /docker-compose-plugin/);
-  assert.match(installer, /docker compose[\s\S]*up -d --build/);
-  assert.match(installer, /HTTP_PORT=51213/);
-  assert.match(compose, /vault_data:\/data/);
-  assert.match(compose, /caddy:2\.10-alpine/);
-  assert.match(compose, /\$\{HTTP_PORT:-51213\}:80/);
+  assert.match(installer, /openssl rand -hex/);
+  assert.match(installer, /SMTP_CONFIG_KEY/);
+  assert.match(installer, /YUEMI_INITIAL_PASSWORD/);
+  assert.match(installer, /BIND_ADDRESS=127\.0\.0\.1/);
+  assert.match(installer, /--profile standalone-https/);
+  assert.doesNotMatch(installer, /首次默认主密码：12345678/);
+  assert.match(compose, /127\.0\.0\.1/);
+  assert.match(compose, /\$\{HTTP_PORT:-51213\}:3000/);
+  assert.match(compose, /profiles:[\s\S]*standalone-https/);
   assert.match(compose, /no-new-privileges:true/);
   assert.match(dockerfile, /node:24-bookworm-slim/);
   assert.match(dockerfile, /USER node/);
   assert.match(caddyfile, /reverse_proxy app:3000/);
-  assert.match(readme, /VPS 一键安装/);
-  assert.match(readme, /http:\/\/VPS-IP:51213/);
-  assert.match(readme, /12345678/);
-  assert.match(packageJson, /"start": "vinext start"/);
-  assert.doesNotMatch(packageJson, /start:vps|build:vps/);
+  assert.match(caddyfile, /Content-Security-Policy/);
+  assert.match(readme, /默认只监听 `127\.0\.0\.1:51213`/);
+  assert.match(readme, /不要把 51213 端口直接开放到公网/);
+  assert.match(readme, /随机初始主密码/);
+  assert.match(packageJson, /"security:audit"/);
 });
 
-test("uses only local SQLite and Node socket adapters", async () => {
+test("uses local SQLite and pinned TLS server names", async () => {
   const [viteConfig, databaseAdapter, socketsAdapter] = await Promise.all([
     readFile(new URL("../vite.config.ts", import.meta.url), "utf8"),
-    readFile(
-      new URL("../runtime/database.ts", import.meta.url),
-      "utf8",
-    ),
-    readFile(
-      new URL("../runtime/sockets.ts", import.meta.url),
-      "utf8",
-    ),
+    readFile(new URL("../runtime/database.ts", import.meta.url), "utf8"),
+    readFile(new URL("../runtime/sockets.ts", import.meta.url), "utf8"),
   ]);
-
   assert.match(viteConfig, /plugins: \[vinext\(\)\]/);
   assert.doesNotMatch(viteConfig, /cloudflare|sites\(/i);
   assert.match(databaseAdapter, /DatabaseSync/);
   assert.match(databaseAdapter, /PRAGMA journal_mode=WAL/);
   assert.match(databaseAdapter, /BEGIN IMMEDIATE/);
   assert.match(socketsAdapter, /tls\.connect/);
-  assert.match(socketsAdapter, /startTls\(\)/);
+  assert.match(socketsAdapter, /servername/);
 });

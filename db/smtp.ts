@@ -1,4 +1,5 @@
 import { connect } from "@/runtime/sockets";
+import { resolvePublicSmtpAddress } from "./smtp-config";
 
 type SmtpReply = {
   code: number;
@@ -148,8 +149,13 @@ export async function sendSmtpMail(input: {
     throw new Error("SMTP 端口无效；当前环境不支持端口 25");
   }
 
+  const endpoint = await resolvePublicSmtpAddress(input.host);
   const socket = connect(
-    { hostname: input.host, port: input.port },
+    {
+      hostname: endpoint.address,
+      servername: endpoint.servername,
+      port: input.port,
+    },
     {
       secureTransport: input.security === "tls" ? "on" : "starttls",
       allowHalfOpen: false,

@@ -84,10 +84,10 @@ export class SqlitePreparedStatement {
     return result(startedAt, rows);
   }
 
-  async first<T = Row>(column?: string): Promise<T | unknown | null> {
+  async first<T = Row>(column?: string): Promise<T | null> {
     const row = this.prepare().get(...this.parameters) as T | undefined;
     if (!row) return null;
-    return column ? (row as Row)[column] : row;
+    return column ? ((row as Row)[column] as T) : row;
   }
 
   async raw<T extends unknown[] = unknown[]>(): Promise<T[]> {
@@ -113,7 +113,8 @@ export class SqliteDatabase {
 
     statement.setReturnArrays(true);
     if (method === "get") {
-      return { rows: statement.get(...values) ?? [] };
+      const row = statement.get(...values) as unknown[] | undefined;
+      return { rows: row ?? [] };
     }
     return { rows: statement.all(...values) };
   }

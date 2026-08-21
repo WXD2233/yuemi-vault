@@ -64,12 +64,20 @@ type VaultPayload = {
     requiresPasswordChange: boolean;
     usesLegacyDefaultEncryption: boolean;
     hasSmtpSecret: boolean;
+    hasRecoveryKey: boolean;
   };
 };
 
-const DEMO_CODE = "246810";
 const LEGACY_DEFAULT_RECORD_PASSWORD = "KeySafe2026!";
-const ENCRYPTED_RECORD_PREFIX = "yv2.";
+const LEGACY_ENCRYPTED_RECORD_PREFIX = "yv2.";
+const ENCRYPTED_RECORD_PREFIX = "yv3.600000.";
+const CURRENT_KDF_ITERATIONS = 600_000;
+function isEncryptedVaultRecord(value: string) {
+  return (
+    value.startsWith(ENCRYPTED_RECORD_PREFIX) ||
+    value.startsWith(LEGACY_ENCRYPTED_RECORD_PREFIX)
+  );
+}
 const encryptedStorageFields = {
   projectName: "加密记录",
   account: "••••••••",
@@ -143,6 +151,7 @@ const defaultPayload: VaultPayload = {
     requiresPasswordChange: true,
     usesLegacyDefaultEncryption: false,
     hasSmtpSecret: false,
+    hasRecoveryKey: false,
   },
 };
 
@@ -218,7 +227,11 @@ function base64ToBytes(value: string) {
   return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
 }
 
-async function deriveVaultKey(masterPassword: string, salt: Uint8Array) {
+async function deriveVaultKey(
+  masterPassword: string,
+  salt: Uint8Array,
+  iterations = CURRENT_KDF_ITERATIONS,
+) {
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(masterPassword),
@@ -230,8 +243,8 @@ async function deriveVaultKey(masterPassword: string, salt: Uint8Array) {
     {
       name: "PBKDF2",
       hash: "SHA-256",
-      salt,
-      iterations: 150_000,
+      salt: new Uint8Array(salt),
+      iterations,
     },
     keyMaterial,
     { name: "AES-GCM", length: 256 },
@@ -284,18 +297,21 @@ async function decryptVaultRecord(
   passwordIv: string,
   masterPassword: string,
 ) {
-  if (!passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX)) {
-    throw new Error("Unsupported encrypted record format");
-  }
-
+  const legacy = passwordCipher.startsWith(LEGACY_ENCRYPTED_RECORD_PREFIX);
+  const current = passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX);
+  if (!legacy && !current) throw new Error("Unsupported encrypted record format");
   const [saltValue, cipherValue] = passwordCipher
-    .slice(ENCRYPTED_RECORD_PREFIX.length)
+    .slice((legacy ? LEGACY_ENCRYPTED_RECORD_PREFIX : ENCRYPTED_RECORD_PREFIX).length)
     .split(".");
   if (!saltValue || !cipherValue) {
     throw new Error("Invalid encrypted record");
   }
 
-  const key = await deriveVaultKey(masterPassword, base64ToBytes(saltValue));
+  const key = await deriveVaultKey(
+    masterPassword,
+    base64ToBytes(saltValue),
+    legacy ? 150_000 : CURRENT_KDF_ITERATIONS,
+  );
   const plain = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: base64ToBytes(passwordIv) },
     key,
@@ -354,7 +370,7 @@ type EncryptedBackupDocument = {
   };
 };
 
-const BACKUP_KDF_ITERATIONS = 150_000;
+const BACKUP_KDF_ITERATIONS = 600_000;
 
 async function deriveBackupKey(
   masterPassword: string,
@@ -372,7 +388,7 @@ async function deriveBackupKey(
     {
       name: "PBKDF2",
       hash: "SHA-256",
-      salt,
+      salt: new Uint8Array(salt),
       iterations,
     },
     keyMaterial,
@@ -380,6 +396,86 @@ async function deriveBackupKey(
     false,
     ["encrypt", "decrypt"],
   );
+}
+
+type RecoveryMaterial = {
+  cipher: string;
+  iv: string;
+  salt: string;
+  iterations: number;
+};
+
+async function createRecoveryMaterial(masterPassword: string) {
+  const recoveryKey = bytesToBase64(
+    crypto.getRandomValues(new Uint8Array(32)),
+  );
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveBackupKey(
+    recoveryKey,
+    salt,
+    CURRENT_KDF_ITERATIONS,
+  );
+  const cipher = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(masterPassword),
+  );
+  return {
+    recoveryKey,
+    material: {
+      cipher: bytesToBase64(new Uint8Array(cipher)),
+      iv: bytesToBase64(iv),
+      salt: bytesToBase64(salt),
+      iterations: CURRENT_KDF_ITERATIONS,
+    } satisfies RecoveryMaterial,
+  };
+}
+
+async function decryptRecoveryMaterial(
+  material: RecoveryMaterial,
+  recoveryKey: string,
+) {
+  if (
+    material.iterations !== CURRENT_KDF_ITERATIONS ||
+    recoveryKey.length < 40 ||
+    recoveryKey.length > 80
+  ) {
+    throw new Error("恢复密钥格式不正确");
+  }
+  const key = await deriveBackupKey(
+    recoveryKey.trim(),
+    base64ToBytes(material.salt),
+    material.iterations,
+  );
+  const plain = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(material.iv) },
+    key,
+    base64ToBytes(material.cipher),
+  );
+  const password = new TextDecoder().decode(plain);
+  if (!password || password.length > 128) throw new Error("恢复内容无效");
+  return password;
+}
+
+function downloadRecoveryKey(recoveryKey: string) {
+  const blob = new Blob(
+    [
+      "钥密主密码恢复密钥\n",
+      "请离线保存，不要上传到与密码库相同的服务器。\n\n",
+      recoveryKey,
+      "\n",
+    ],
+    { type: "text/plain;charset=utf-8" },
+  );
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "yuemi-recovery-key.txt";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 async function encryptVaultRecordsBatch(
@@ -436,7 +532,7 @@ async function preparePasswordChangeEntries(
 
   const plainRecords = await Promise.all(
     records.map(async (entry) => {
-      if (entry.passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX)) {
+      if (isEncryptedVaultRecord(entry.passwordCipher)) {
         return decryptVaultRecord(
           entry.passwordCipher,
           entry.passwordIv,
@@ -588,7 +684,7 @@ async function createEncryptedBackup(
     .filter(
       (entry) =>
         !entry.decryptionError &&
-        entry.passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX),
+      isEncryptedVaultRecord(entry.passwordCipher),
     )
     .map((entry) => ({
       passwordCipher: entry.passwordCipher,
@@ -651,7 +747,7 @@ async function decryptEncryptedBackup(
     document.version !== 1 ||
     document.kdf?.name !== "PBKDF2" ||
     document.kdf.hash !== "SHA-256" ||
-    document.kdf.iterations !== BACKUP_KDF_ITERATIONS ||
+    ![150_000, BACKUP_KDF_ITERATIONS].includes(document.kdf.iterations) ||
     document.cipher?.name !== "AES-GCM"
   ) {
     throw new Error("不支持的钥密备份文件");
@@ -682,7 +778,7 @@ async function decryptEncryptedBackup(
       payload.records.some(
         (record) =>
           typeof record.passwordCipher !== "string" ||
-          !record.passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX) ||
+          !isEncryptedVaultRecord(record.passwordCipher) ||
           typeof record.passwordIv !== "string" ||
           !record.passwordIv,
       )
@@ -721,7 +817,7 @@ async function hydrateVaultEntries(
 ) {
   return Promise.all(
     entries.map(async (entry) => {
-      if (!entry.passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX)) {
+      if (!isEncryptedVaultRecord(entry.passwordCipher)) {
         return entry;
       }
 
@@ -824,6 +920,7 @@ export default function Home() {
   const [verificationError, setVerificationError] = useState("");
   const [verificationChallenge, setVerificationChallenge] = useState("");
   const [deviceId, setDeviceId] = useState("");
+  const [deviceCredential, setDeviceCredential] = useState("");
   const [sessionToken, setSessionToken] = useState("");
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(false);
@@ -839,9 +936,13 @@ export default function Home() {
   const [recoveryStep, setRecoveryStep] =
     useState<RecoveryStep>("closed");
   const [recoveryCode, setRecoveryCode] = useState("");
+  const [recoveryChallenge, setRecoveryChallenge] = useState("");
   const [recoveryEmail, setRecoveryEmail] = useState("");
+  const [recoveryKeyInput, setRecoveryKeyInput] = useState("");
   const [recoveryToken, setRecoveryToken] = useState("");
   const [recoveryError, setRecoveryError] = useState("");
+  const [autoLockMinutes, setAutoLockMinutes] = useState(15);
+  const [isSecureConnection, setIsSecureConnection] = useState(false);
 
   const [passwordLength, setPasswordLength] = useState(20);
   const [passwordOptions, setPasswordOptions] = useState({
@@ -850,7 +951,14 @@ export default function Home() {
     lowercase: true,
     symbols: true,
   });
-  const [generatedPassword, setGeneratedPassword] = useState("");
+  const [generatedPassword, setGeneratedPassword] = useState(() =>
+    makePassword(20, {
+      numbers: true,
+      uppercase: true,
+      lowercase: true,
+      symbols: true,
+    }),
+  );
   const [entryForm, setEntryForm] = useState({
     projectName: "",
     account: "",
@@ -858,6 +966,31 @@ export default function Home() {
     password: "",
     notes: "",
   });
+
+  const lockVault = useCallback(
+    async (message = "密码库已锁定") => {
+      const token = sessionToken;
+      if (token) {
+        await fetch("/api/vault", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ action: "logout" }),
+          keepalive: true,
+        }).catch(() => undefined);
+      }
+      setMasterPassword("");
+      setShowMasterPassword(false);
+      setSessionToken("");
+      setVault(defaultPayload);
+      setView("vault");
+      setPhase("locked");
+      setToast(message);
+    },
+    [sessionToken],
+  );
 
   const fetchVault = useCallback(
     async (token: string, unlockPassword: string) => {
@@ -909,32 +1042,41 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    let localDeviceId = window.localStorage.getItem("yuemi-device-id");
-    if (!localDeviceId) {
-      localDeviceId = crypto.randomUUID();
-      window.localStorage.setItem("yuemi-device-id", localDeviceId);
-    }
-    setDeviceId(localDeviceId);
-    setGeneratedPassword(
-      makePassword(passwordLength, {
-        numbers: true,
-        uppercase: true,
-        lowercase: true,
-        symbols: true,
-      }),
-    );
+    const timer = window.setTimeout(() => {
+      let localDeviceId = window.localStorage.getItem("yuemi-device-id");
+      if (!localDeviceId) {
+        localDeviceId = crypto.randomUUID();
+        window.localStorage.setItem("yuemi-device-id", localDeviceId);
+      }
+      setDeviceId(localDeviceId);
+      setDeviceCredential(
+        window.localStorage.getItem("yuemi-device-credential") ?? "",
+      );
+      const savedAutoLock = Number(
+        window.localStorage.getItem("yuemi-auto-lock-minutes") ?? "15",
+      );
+      if ([5, 15, 30, 60].includes(savedAutoLock)) {
+        setAutoLockMinutes(savedAutoLock);
+      }
+      setIsSecureConnection(window.isSecureContext);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
-    void refreshRecoveryStatus();
+    const timer = window.setTimeout(() => void refreshRecoveryStatus(), 0);
+    return () => window.clearTimeout(timer);
   }, [refreshRecoveryStatus]);
 
   useEffect(() => {
-    const savedTheme = window.localStorage.getItem("yuemi-theme");
-    if (themeValues.includes(savedTheme as ThemePreference)) {
-      setTheme(savedTheme as ThemePreference);
-    }
-    setThemeLoaded(true);
+    const timer = window.setTimeout(() => {
+      const savedTheme = window.localStorage.getItem("yuemi-theme");
+      if (themeValues.includes(savedTheme as ThemePreference)) {
+        setTheme(savedTheme as ThemePreference);
+      }
+      setThemeLoaded(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -965,8 +1107,37 @@ export default function Home() {
   }, [toast]);
 
   useEffect(() => {
+    window.localStorage.setItem(
+      "yuemi-auto-lock-minutes",
+      String(autoLockMinutes),
+    );
+    if (phase !== "vault") return;
+
+    let timer = window.setTimeout(
+      () => void lockVault("长时间未操作，密码库已自动锁定"),
+      autoLockMinutes * 60_000,
+    );
+    const resetTimer = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(
+        () => void lockVault("长时间未操作，密码库已自动锁定"),
+        autoLockMinutes * 60_000,
+      );
+    };
+    const events: Array<keyof WindowEventMap> = [
+      "pointerdown",
+      "keydown",
+      "touchstart",
+    ];
+    events.forEach((event) => window.addEventListener(event, resetTimer));
+    return () => {
+      window.clearTimeout(timer);
+      events.forEach((event) => window.removeEventListener(event, resetTimer));
+    };
+  }, [autoLockMinutes, lockVault, phase]);
+
+  useEffect(() => {
     if (!lockedUntil) {
-      setLockoutRemaining(0);
       return;
     }
 
@@ -1033,8 +1204,9 @@ export default function Home() {
   }, [passwordLength, passwordOptions]);
 
   useEffect(() => {
+    // The generated value intentionally follows the selected rule controls.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (generatedPassword) regenerate();
-    // Regenerate only when the password rules change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [passwordLength, passwordOptions]);
 
@@ -1072,6 +1244,7 @@ export default function Home() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           deviceId,
+          deviceCredential,
           masterPassword,
           deviceName: "Windows 桌面设备",
           browser: "Codex 浏览器",
@@ -1087,6 +1260,7 @@ export default function Home() {
         challengeToken?: string;
         email?: string;
         sessionToken?: string;
+        deviceCredential?: string;
       };
 
       if (!response.ok) {
@@ -1123,6 +1297,13 @@ export default function Home() {
       }
 
       setSessionToken(result.sessionToken);
+      if (result.deviceCredential) {
+        window.localStorage.setItem(
+          "yuemi-device-credential",
+          result.deviceCredential,
+        );
+        setDeviceCredential(result.deviceCredential);
+      }
       const loadedVault = await fetchVault(
         result.sessionToken,
         masterPassword,
@@ -1159,6 +1340,7 @@ export default function Home() {
       const result = (await response.json()) as {
         error?: string;
         sessionToken?: string;
+        deviceCredential?: string;
       };
       if (!response.ok || !result.sessionToken) {
         setVerificationError(result.error ?? "设备验证失败，请稍后重试");
@@ -1166,6 +1348,13 @@ export default function Home() {
       }
 
       setSessionToken(result.sessionToken);
+      if (result.deviceCredential) {
+        window.localStorage.setItem(
+          "yuemi-device-credential",
+          result.deviceCredential,
+        );
+        setDeviceCredential(result.deviceCredential);
+      }
       const loadedVault = await fetchVault(
         result.sessionToken,
         masterPassword,
@@ -1253,7 +1442,7 @@ export default function Home() {
 
       if (!nextPassword && currentEntry) {
         if (
-          currentEntry.passwordCipher.startsWith(ENCRYPTED_RECORD_PREFIX)
+          isEncryptedVaultRecord(currentEntry.passwordCipher)
         ) {
           const payload = await decryptVaultRecord(
             currentEntry.passwordCipher,
@@ -1414,13 +1603,34 @@ export default function Home() {
       await refreshRecoveryStatus();
       setToast(
         normalizedEmail
-          ? "通知邮箱已保存，登录页找回入口已开启"
+          ? "通知邮箱已保存；请再生成恢复密钥并完成 SMTP 测试"
           : "通知邮箱已移除，登录页找回入口已关闭",
       );
       return true;
     } catch {
       setToast("通知邮箱保存失败");
       return false;
+    }
+  }
+
+  async function handleGenerateRecoveryKey() {
+    if (!isNotificationEmailConfigured(vault.settings.email)) {
+      setToast("请先保存通知邮箱");
+      return null;
+    }
+    try {
+      const recovery = await createRecoveryMaterial(masterPassword);
+      await postVault({
+        action: "set-recovery-material",
+        ...recovery.material,
+      });
+      await fetchVault(sessionToken, masterPassword);
+      await refreshRecoveryStatus();
+      setToast("恢复密钥已生成，请立即下载并离线保存");
+      return recovery.recoveryKey;
+    } catch {
+      setToast("恢复密钥生成失败");
+      return null;
     }
   }
 
@@ -1479,6 +1689,8 @@ export default function Home() {
   async function openRecovery() {
     setRecoveryCode("");
     setRecoveryEmail("");
+    setRecoveryKeyInput("");
+    setRecoveryChallenge("");
     setRecoveryToken("");
     setRecoveryError("");
     setLoading(true);
@@ -1491,13 +1703,15 @@ export default function Home() {
       const result = (await response.json()) as {
         error?: string;
         sent?: boolean;
+        challengeToken?: string;
         maskedEmail?: string;
       };
-      if (!response.ok || !result.sent) {
+      if (!response.ok || !result.sent || !result.challengeToken) {
         setUnlockError(result.error ?? "找回验证码发送失败");
         return;
       }
       setRecoveryMaskedEmail(result.maskedEmail ?? recoveryMaskedEmail);
+      setRecoveryChallenge(result.challengeToken);
       setRecoveryStep("code");
     } catch {
       setUnlockError("找回验证码发送失败，请稍后重试");
@@ -1510,6 +1724,8 @@ export default function Home() {
     setRecoveryStep("closed");
     setRecoveryCode("");
     setRecoveryEmail("");
+    setRecoveryKeyInput("");
+    setRecoveryChallenge("");
     setRecoveryToken("");
     setRecoveryError("");
   }
@@ -1525,6 +1741,7 @@ export default function Home() {
         body: JSON.stringify({
           action: "verify-code",
           code: recoveryCode,
+          challengeToken: recoveryChallenge,
         }),
       });
       const result = (await response.json()) as {
@@ -1555,23 +1772,33 @@ export default function Home() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          action: "send-password",
+          action: "get-material",
           email: recoveryEmail.trim(),
           recoveryToken,
         }),
       });
       const result = (await response.json()) as {
         error?: string;
-        delivered?: boolean;
+        material?: RecoveryMaterial;
       };
-      if (!response.ok || !result.delivered) {
+      if (!response.ok || !result.material) {
         setRecoveryError(result.error ?? "通知邮箱验证失败");
         return;
       }
-      setRequiresInitialPasswordChange(true);
+      const recoveredPassword = await decryptRecoveryMaterial(
+        result.material,
+        recoveryKeyInput,
+      );
+      setMasterPassword(recoveredPassword);
       setRecoveryStep("sent");
-    } catch {
-      setRecoveryError("新主密码发送失败，请稍后重试");
+    } catch (error) {
+      setRecoveryError(
+        error instanceof DOMException && error.name === "OperationError"
+          ? "恢复密钥不正确"
+          : error instanceof Error
+            ? error.message
+            : "主密码恢复失败，请稍后重试",
+      );
     } finally {
       setLoading(false);
     }
@@ -1587,7 +1814,9 @@ export default function Home() {
       if (removedCurrentDevice) {
         const nextDeviceId = crypto.randomUUID();
         window.localStorage.setItem("yuemi-device-id", nextDeviceId);
+        window.localStorage.removeItem("yuemi-device-credential");
         setDeviceId(nextDeviceId);
+        setDeviceCredential("");
         setSessionToken("");
         setVault(defaultPayload);
         setMasterPassword("");
@@ -1679,8 +1908,8 @@ export default function Home() {
           ) : null}
           {requiresInitialPasswordChange ? (
             <div className="demo-hint">
-              <span>首次登录默认密码（登录后必须修改）</span>
-              <strong>12345678</strong>
+              <span>首次登录后必须修改初始密码</span>
+              <strong>请查看安装完成信息</strong>
             </div>
           ) : null}
           <div className="security-note">
@@ -1737,22 +1966,18 @@ export default function Home() {
                       {loading ? "验证中…" : "验证并继续"}
                     </button>
                   </form>
-                  <div className="demo-hint recovery-demo-hint">
-                    <span>演示验证码</span>
-                    <strong>{DEMO_CODE}</strong>
-                  </div>
                 </>
               ) : null}
               {recoveryStep === "email" ? (
                 <>
-                  <span className="recovery-step">步骤 2 / 2 · 邮箱确认</span>
-                  <h2 id="recovery-title">输入通知邮箱</h2>
+                  <span className="recovery-step">步骤 2 / 2 · 本地恢复</span>
+                  <h2 id="recovery-title">输入邮箱和恢复密钥</h2>
                   <p>
                     请输入设置中保存的完整邮箱
                     {recoveryMaskedEmail
                       ? `（${recoveryMaskedEmail}）`
                       : ""}
-                    ，一致后才会发送新主密码。
+                    ，并输入设置时离线保存的恢复密钥。主密码只会在本机解密，不会通过邮件发送。
                   </p>
                   <form className="auth-form" onSubmit={handleRecoveryEmail}>
                     <label htmlFor="recovery-email">通知邮箱</label>
@@ -1767,15 +1992,30 @@ export default function Home() {
                       placeholder="输入设置中的通知邮箱"
                       autoFocus
                     />
+                    <label htmlFor="recovery-key">恢复密钥</label>
+                    <input
+                      id="recovery-key"
+                      type="password"
+                      autoComplete="off"
+                      value={recoveryKeyInput}
+                      onChange={(event) =>
+                        setRecoveryKeyInput(event.target.value.trim())
+                      }
+                      placeholder="粘贴离线保存的恢复密钥"
+                    />
                     {recoveryError ? (
                       <p className="form-error">{recoveryError}</p>
                     ) : null}
                     <button
                       className="primary-button"
                       type="submit"
-                      disabled={loading || !recoveryEmail.trim()}
+                      disabled={
+                        loading ||
+                        !recoveryEmail.trim() ||
+                        recoveryKeyInput.length < 40
+                      }
                     >
-                      {loading ? "发送中…" : "发送新的主密码"}
+                      {loading ? "本地解密中…" : "恢复主密码"}
                     </button>
                   </form>
                 </>
@@ -1785,10 +2025,10 @@ export default function Home() {
                   <span className="recovery-success-mark" aria-hidden="true">
                     ✓
                   </span>
-                  <span className="recovery-step">邮件发送完成</span>
-                  <h2 id="recovery-title">新主密码已发送</h2>
+                  <span className="recovery-step">本地恢复完成</span>
+                  <h2 id="recovery-title">主密码已填入</h2>
                   <p>
-                    通知邮箱验证成功，请前往邮箱查看新的主密码。
+                    主密码已在当前浏览器中解密并填入登录框，关闭窗口后点击“解锁并进入”。
                   </p>
                   <button
                     className="primary-button"
@@ -1797,7 +2037,7 @@ export default function Home() {
                       closeRecovery();
                     }}
                   >
-                    返回登录
+                    返回并解锁
                   </button>
                 </div>
               ) : null}
@@ -1842,8 +2082,17 @@ export default function Home() {
             />
             <div className="form-row">
               <span>未收到验证码？</span>
-              <button type="button" className="text-button compact">
-                重新发送 00:42
+              <button
+                type="button"
+                className="text-button compact"
+                onClick={() => {
+                  setVerificationCode("");
+                  setVerificationChallenge("");
+                  setPhase("locked");
+                  setToast("请重新输入主密码发送新验证码");
+                }}
+              >
+                重新发送
               </button>
             </div>
             {verificationError ? (
@@ -1860,10 +2109,6 @@ export default function Home() {
               返回
             </button>
           </form>
-          <div className="demo-hint">
-            <span>演示验证码</span>
-            <strong>{DEMO_CODE}</strong>
-          </div>
         </section>
       </main>
     );
@@ -1964,20 +2209,19 @@ export default function Home() {
                 }
               </span>
             </button>
-            <span className="status-pill">
+            <span
+              className={
+                isSecureConnection ? "status-pill" : "status-pill insecure"
+              }
+            >
               <i />
-              已安全连接
+              {isSecureConnection ? "HTTPS 安全连接" : "连接未使用 HTTPS"}
             </span>
             <button
               className="avatar"
               type="button"
               aria-label="锁定密码库"
-              onClick={() => {
-                setMasterPassword("");
-                setSessionToken("");
-                setVault(defaultPayload);
-                setPhase("locked");
-              }}
+              onClick={() => void lockVault()}
             >
               W
             </button>
@@ -2007,6 +2251,15 @@ export default function Home() {
           />
         ) : (
           <SettingsView
+            key={[
+              vault.settings.email,
+              vault.settings.smtpProvider,
+              vault.settings.smtpHost,
+              vault.settings.smtpPort,
+              vault.settings.smtpSecurity,
+              vault.settings.smtpUsername,
+              vault.settings.smtpFromName,
+            ].join("|")}
             vault={vault}
             deviceId={deviceId}
             theme={theme}
@@ -2017,9 +2270,12 @@ export default function Home() {
             handleToggleTwoFactor={handleToggleTwoFactor}
             handleLockoutPolicy={handleLockoutPolicy}
             handleSaveRecoveryEmail={handleSaveRecoveryEmail}
+            handleGenerateRecoveryKey={handleGenerateRecoveryKey}
             handleSaveSmtpConfig={handleSaveSmtpConfig}
             handleToggleSmtpFeature={handleToggleSmtpFeature}
             handleTestSmtp={handleTestSmtp}
+            autoLockMinutes={autoLockMinutes}
+            setAutoLockMinutes={setAutoLockMinutes}
             setDeleteTarget={setDeleteTarget}
           />
         )}
@@ -2128,10 +2384,6 @@ function PasswordLengthInput({
 }) {
   const [draft, setDraft] = useState(String(value));
 
-  useEffect(() => {
-    setDraft(String(value));
-  }, [value]);
-
   function commitDraft() {
     const parsed = Number.parseInt(draft, 10);
     const nextValue = Number.isNaN(parsed)
@@ -2226,9 +2478,7 @@ function VaultView({
         throw new Error("Record decryption failed");
       }
 
-      const password = entry.passwordCipher.startsWith(
-        ENCRYPTED_RECORD_PREFIX,
-      )
+      const password = isEncryptedVaultRecord(entry.passwordCipher)
         ? (
             await decryptVaultRecord(
               entry.passwordCipher,
@@ -2326,6 +2576,7 @@ function VaultView({
               onChange={(event) => setPasswordLength(Number(event.target.value))}
             />
             <PasswordLengthInput
+              key={passwordLength}
               value={passwordLength}
               onChange={setPasswordLength}
             />
@@ -2790,9 +3041,9 @@ function ForcedPasswordChangeView({
         </div>
         <div>
           <span className="eyebrow">首次使用安全检查</span>
-          <h2>请先修改默认主密码</h2>
+          <h2>请先修改初始主密码</h2>
           <p>
-            默认密码仅用于第一次进入。在设置新的主密码前，密码库、密码记录及其他设置均不可访问。
+            初始密码仅用于第一次进入。在设置新的主密码前，密码库、密码记录及其他设置均不可访问。
           </p>
         </div>
       </section>
@@ -2810,7 +3061,7 @@ function ForcedPasswordChangeView({
           onSubmit={submitPasswordChange}
         >
           <label className="current-password-field">
-            当前默认密码
+            当前初始密码
             <input
               type="password"
               autoComplete="current-password"
@@ -2821,7 +3072,7 @@ function ForcedPasswordChangeView({
                   currentPassword: event.target.value,
                 }))
               }
-              placeholder="输入默认密码 12345678"
+              placeholder="输入安装完成时显示的初始密码"
               disabled={changingPassword}
               autoFocus
             />
@@ -2904,9 +3155,12 @@ function SettingsView({
   handleToggleTwoFactor,
   handleLockoutPolicy,
   handleSaveRecoveryEmail,
+  handleGenerateRecoveryKey,
   handleSaveSmtpConfig,
   handleToggleSmtpFeature,
   handleTestSmtp,
+  autoLockMinutes,
+  setAutoLockMinutes,
   setDeleteTarget,
 }: {
   vault: VaultPayload;
@@ -2924,6 +3178,7 @@ function SettingsView({
     lockoutMinutes: number,
   ) => void;
   handleSaveRecoveryEmail: (email: string) => Promise<boolean>;
+  handleGenerateRecoveryKey: () => Promise<string | null>;
   handleSaveSmtpConfig: (config: {
     provider: string;
     host: string;
@@ -2935,6 +3190,8 @@ function SettingsView({
   }) => Promise<boolean>;
   handleToggleSmtpFeature: () => Promise<void>;
   handleTestSmtp: () => Promise<boolean>;
+  autoLockMinutes: number;
+  setAutoLockMinutes: (minutes: number) => void;
   setDeleteTarget: (device: TrustedDevice) => void;
 }) {
   const [notificationEmail, setNotificationEmail] = useState(
@@ -2971,39 +3228,24 @@ function SettingsView({
   const [passwordChangeError, setPasswordChangeError] = useState("");
   const [transferBusy, setTransferBusy] = useState(false);
   const [transferStatus, setTransferStatus] = useState("");
-
-  useEffect(() => {
-    setNotificationEmail(
-      isNotificationEmailConfigured(vault.settings.email)
-        ? vault.settings.email
-        : "",
-    );
-  }, [vault.settings.email]);
-
-  useEffect(() => {
-    setSmtpProvider(
-      displaySmtpProvider(vault.settings.smtpProvider) || "QQ 邮箱",
-    );
-    setSmtpHost(vault.settings.smtpHost || "smtp.qq.com");
-    setSmtpPort(vault.settings.smtpPort || 465);
-    setSmtpSecurity(vault.settings.smtpSecurity || "tls");
-    setSmtpUsername(vault.settings.smtpUsername);
-    setSmtpFromName(vault.settings.smtpFromName || "钥密");
-    setSmtpSecret("");
-  }, [
-    vault.settings.smtpProvider,
-    vault.settings.smtpHost,
-    vault.settings.smtpPort,
-    vault.settings.smtpSecurity,
-    vault.settings.smtpUsername,
-    vault.settings.smtpFromName,
-  ]);
+  const [newRecoveryKey, setNewRecoveryKey] = useState("");
+  const [generatingRecoveryKey, setGeneratingRecoveryKey] = useState(false);
 
   async function saveNotificationEmail(event: FormEvent) {
     event.preventDefault();
     setSavingEmail(true);
     await handleSaveRecoveryEmail(notificationEmail);
     setSavingEmail(false);
+  }
+
+  async function generateRecoveryKey() {
+    setGeneratingRecoveryKey(true);
+    const recoveryKey = await handleGenerateRecoveryKey();
+    if (recoveryKey) {
+      setNewRecoveryKey(recoveryKey);
+      downloadRecoveryKey(recoveryKey);
+    }
+    setGeneratingRecoveryKey(false);
   }
 
   async function saveSmtpConfig(event: FormEvent) {
@@ -3353,10 +3595,57 @@ function SettingsView({
             </button>
           </div>
         </form>
+        <div className="recovery-key-settings">
+          <div>
+            <strong>离线恢复密钥</strong>
+            <span>
+              {vault.settings.hasRecoveryKey
+                ? "✓ 已配置；修改主密码后需要重新生成"
+                : "尚未配置；没有恢复密钥时无法找回主密码"}
+            </span>
+          </div>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={
+              generatingRecoveryKey ||
+              !isNotificationEmailConfigured(vault.settings.email)
+            }
+            onClick={() => void generateRecoveryKey()}
+          >
+            {generatingRecoveryKey
+              ? "生成中…"
+              : vault.settings.hasRecoveryKey
+                ? "更新恢复密钥"
+                : "生成恢复密钥"}
+          </button>
+        </div>
+        {newRecoveryKey ? (
+          <div className="recovery-key-output" role="status">
+            <strong>请立即离线保存；关闭页面后不再显示：</strong>
+            <code>{newRecoveryKey}</code>
+            <div>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void navigator.clipboard.writeText(newRecoveryKey)}
+              >
+                复制恢复密钥
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => downloadRecoveryKey(newRecoveryKey)}
+              >
+                下载文本文件
+              </button>
+            </div>
+          </div>
+        ) : null}
         <div className="security-callout">
           <ShieldMark small />
           <p>
-            保存有效邮箱后即可修改上方开关，登录页也会出现“忘记主密码”。清空并保存会同时关闭这两项保护。
+            新设备验证需要通知邮箱和已测试的 SMTP。主密码找回还必须生成离线恢复密钥；服务器不会保存或邮件发送明文主密码。
           </p>
         </div>
       </section>
@@ -3640,7 +3929,7 @@ function SettingsView({
           <span className="policy-status">服务端强制执行</span>
         </div>
         <p className="settings-description">
-          同一设备连续输错达到设定次数后，将在设定时间内无法再次访问；刷新页面也不会解除锁定。
+          同一来源网络连续输错达到设定次数后，将在设定时间内无法再次访问；刷新页面也不会解除锁定。
         </p>
         <div className="lockout-policy-grid">
           <label>
@@ -3738,9 +4027,13 @@ function SettingsView({
         <div>
           <span className="eyebrow">高级安全</span>
           <h2>自动锁定</h2>
-          <p>连续 15 分钟无操作后自动锁定密码库。</p>
+          <p>连续 {autoLockMinutes} 分钟无操作后自动注销服务端会话并锁定密码库。</p>
         </div>
-        <select aria-label="自动锁定时间" defaultValue="15">
+        <select
+          aria-label="自动锁定时间"
+          value={autoLockMinutes}
+          onChange={(event) => setAutoLockMinutes(Number(event.target.value))}
+        >
           <option value="5">5 分钟</option>
           <option value="15">15 分钟</option>
           <option value="30">30 分钟</option>

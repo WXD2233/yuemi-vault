@@ -1,7 +1,7 @@
 import net, { type Socket as NetSocket } from "node:net";
 import tls, { type TLSSocket } from "node:tls";
 
-type Address = { hostname: string; port: number };
+type Address = { hostname: string; port: number; servername?: string };
 type SocketOptions = {
   secureTransport?: "off" | "on" | "starttls";
   allowHalfOpen?: boolean;
@@ -81,7 +81,7 @@ class VpsSocket {
     this.detachReadable();
     const socket = tls.connect({
       socket: this.socket as NetSocket,
-      servername: this.address.hostname,
+      servername: this.address.servername ?? this.address.hostname,
     });
     return new VpsSocket(socket, this.address, true);
   }
@@ -106,7 +106,7 @@ export function connect(address: Address, options: SocketOptions = {}) {
     ? tls.connect({
         host: address.hostname,
         port: address.port,
-        servername: address.hostname,
+        servername: address.servername ?? address.hostname,
       })
     : net.connect({
         host: address.hostname,
