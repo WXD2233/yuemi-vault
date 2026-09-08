@@ -4,6 +4,50 @@
 
 项目只包含 Node.js、SQLite 与 Docker/VPS 部署，不包含 Cloudflare 或 Sites 配置。
 
+## Docker 版本（服务器已安装 Docker）
+
+如果服务器已经有 Docker Engine 与 Docker Compose，直接克隆项目并运行：
+
+```bash
+git clone https://github.com/WXD2233/yuemi-vault.git
+cd yuemi-vault
+bash docker-start.sh
+```
+
+脚本会为当前服务器生成独立的随机初始主密码和 `SMTP_CONFIG_KEY`，构建精简运行镜像，并只启动应用容器。默认地址是：
+
+```text
+http://127.0.0.1:51213
+```
+
+该模式不会启动项目内置 Caddy，也不会占用 80/443。请让服务器已有的 Nginx、Caddy、Traefik、宝塔或 1Panel 通过 HTTPS 反向代理到上述地址。
+
+也可以手动复制配置并启动：
+
+```bash
+cp docker.env.example .env
+openssl rand -hex 12
+openssl rand -hex 32
+# 把上面两条命令的结果分别填入 .env
+chmod 600 .env
+docker compose up -d --build app
+```
+
+每次推送到 `main` 或创建 `v*` 标签时，GitHub Actions 还会构建 `linux/amd64` 与 `linux/arm64` 镜像并发布到：
+
+```text
+ghcr.io/wxd2233/yuemi-vault:latest
+```
+
+要使用预构建镜像，在 `.env` 中设置 `YUEMI_IMAGE=ghcr.io/wxd2233/yuemi-vault:latest`，然后执行：
+
+```bash
+docker compose pull app
+docker compose up -d --no-build app
+```
+
+GitHub 容器包需要设为公开才能匿名拉取；私有包需要先执行 `docker login ghcr.io`。
+
 ## VPS 一键安装
 
 支持 64 位 Ubuntu 22.04/24.04/26.04 和 Debian 12/13。安装脚本会从 Docker 官方软件源安装 Docker Engine 与 Compose、下载项目、生成每台服务器独有的安全密钥、构建容器并启动服务。
@@ -113,7 +157,7 @@ SMTP_CONFIG_KEY=第二条随机值
 
 ```bash
 chmod 600 .env
-docker compose up -d --build
+docker compose up -d --build app
 ```
 
 生产环境缺少 `YUEMI_INITIAL_PASSWORD` 或 `SMTP_CONFIG_KEY` 时会拒绝启动，防止所有安装共用公开密码或无法安全保存 SMTP 授权码。

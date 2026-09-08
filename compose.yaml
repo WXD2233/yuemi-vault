@@ -5,12 +5,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: yuemi-vault:local
+    image: ${YUEMI_IMAGE:-yuemi-vault:local}
+    init: true
     restart: unless-stopped
     environment:
       NODE_ENV: production
       YUEMI_DATA_DIR: /data
-      HOSTNAME: 0.0.0.0
+      HOST: 0.0.0.0
       PORT: 3000
       YUEMI_INITIAL_PASSWORD: ${YUEMI_INITIAL_PASSWORD:?Set YUEMI_INITIAL_PASSWORD in .env}
       SMTP_CONFIG_KEY: ${SMTP_CONFIG_KEY:?Set SMTP_CONFIG_KEY in .env}
@@ -24,7 +25,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:3000/api/auth/recovery').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:3000/api/health',{cache:'no-store'}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
         ]
       interval: 15s
       timeout: 5s
@@ -34,6 +35,13 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    pids_limit: 256
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - internal
 
@@ -57,6 +65,11 @@ services:
       - caddy_config:/config
     security_opt:
       - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - internal
 
